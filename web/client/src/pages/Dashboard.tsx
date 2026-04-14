@@ -1,5 +1,5 @@
 import { useApi } from "../lib/hooks";
-import { round, formatDate, formatMinutes } from "../lib/format";
+import { round, formatDate, formatDistanceKm, formatMinutes } from "../lib/format";
 import { MetricCard } from "../components/MetricCard";
 import { Sparkline } from "../components/Sparkline";
 import { SleepBar } from "../components/SleepBar";
@@ -341,7 +341,7 @@ export function Dashboard() {
                 <td>{a.name}</td>
                 <td><span class="badge badge-blue">{a.type}</span></td>
                 <td>{a.duration_min ? `${Math.round(a.duration_min)}m` : "--"}</td>
-                <td>{a.distance_km ? `${a.distance_km} km` : "--"}</td>
+                <td>{a.distance_km ? formatDistanceKm(a.distance_km) : "--"}</td>
                 <td>{a.avg_hr ? `${Math.round(a.avg_hr)} bpm` : "--"}</td>
               </tr>
             ))}

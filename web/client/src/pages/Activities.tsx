@@ -1,6 +1,6 @@
 import { useState } from "preact/hooks";
 import { useApi } from "../lib/hooks";
-import { formatDate, formatDuration, formatPace, round } from "../lib/format";
+import { formatDate, formatDistanceKm, formatDuration, formatPace, kmToMiles, round } from "../lib/format";
 import { MetricCard } from "../components/MetricCard";
 import { ActivityDetail } from "../components/ActivityDetail";
 
@@ -37,7 +37,7 @@ export function Activities() {
 
   const totalActivities = data?.length ?? 0;
   const totalDuration = data?.reduce((s, a) => s + (a.duration_min || 0), 0) ?? 0;
-  const totalDistance = data?.reduce((s, a) => s + (a.distance_km || 0), 0) ?? 0;
+  const totalDistanceMi = data?.reduce((s, a) => s + kmToMiles(a.distance_km || 0), 0) ?? 0;
   const totalCalories = data?.reduce((s, a) => s + (a.calories || 0), 0) ?? 0;
 
   return (
@@ -63,7 +63,7 @@ export function Activities() {
         <div class="cards">
           <MetricCard label="Activities" value={totalActivities} color="var(--accent)" />
           <MetricCard label="Total Time" value={formatDuration(totalDuration * 60)} color="var(--color-sleep)" />
-          <MetricCard label="Total Distance" value={`${round(totalDistance, 1)}`} unit="km" color="var(--color-steps)" />
+          <MetricCard label="Total Distance" value={`${round(totalDistanceMi, 1)}`} unit="mi" color="var(--color-steps)" />
           <MetricCard label="Total Calories" value={totalCalories.toLocaleString()} unit="kcal" color="var(--color-stress)" />
         </div>
       )}
@@ -98,7 +98,7 @@ export function Activities() {
                     <td>{a.name}</td>
                     <td><span class="badge badge-blue">{a.type}</span></td>
                     <td>{a.duration_min ? formatDuration(a.duration_min * 60) : "--"}</td>
-                    <td>{a.distance_km ? `${a.distance_km} km` : "--"}</td>
+                    <td>{a.distance_km ? formatDistanceKm(a.distance_km) : "--"}</td>
                     <td>{a.avg_hr ? `${Math.round(a.avg_hr)}` : "--"}</td>
                     <td>{a.elevation_gain_m ? `${Math.round(a.elevation_gain_m)}m` : "--"}</td>
                     <td>{a.training_load ?? "--"}</td>

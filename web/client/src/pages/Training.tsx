@@ -1,5 +1,5 @@
 import { useApi } from "../lib/hooks";
-import { round, formatDate, formatDuration } from "../lib/format";
+import { round, formatDate, formatDistanceMeters, formatDuration, metersToMiles } from "../lib/format";
 import { MetricCard } from "../components/MetricCard";
 import { Sparkline } from "../components/Sparkline";
 
@@ -48,10 +48,10 @@ interface PersonalRecord {
 }
 
 const PR_TYPE_LABELS: Record<number, { label: string; unit: string; format: (v: number) => string }> = {
-  1: { label: "Fastest Distance", unit: "m", format: (v) => `${round(v, 0)}m` },
-  2: { label: "Fastest Distance", unit: "m", format: (v) => `${round(v, 0)}m` },
-  3: { label: "Longest Distance", unit: "m", format: (v) => `${round(v / 1000, 2)}km` },
-  7: { label: "Longest Run", unit: "m", format: (v) => `${round(v / 1000, 2)}km` },
+  1: { label: "Fastest Distance", unit: "mi", format: (v) => `${round(metersToMiles(v), 2)}mi` },
+  2: { label: "Fastest Distance", unit: "mi", format: (v) => `${round(metersToMiles(v), 2)}mi` },
+  3: { label: "Longest Distance", unit: "mi", format: (v) => formatDistanceMeters(v) },
+  7: { label: "Longest Run", unit: "mi", format: (v) => formatDistanceMeters(v) },
 };
 
 function levelBadge(level?: string) {

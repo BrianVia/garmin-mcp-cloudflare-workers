@@ -1,5 +1,5 @@
 import { useApi } from "../lib/hooks";
-import { formatDuration, formatPace, round } from "../lib/format";
+import { formatDuration, formatPace, metersToMiles, msToMph, round } from "../lib/format";
 
 interface ActivityData {
   activity: {
@@ -165,13 +165,13 @@ export function ActivityDetail({ id }: { id: number }) {
       <div style="display:flex;flex-wrap:wrap;gap:1.25rem;margin-bottom:1.25rem;justify-content:center">
         <Stat label="Duration" value={formatDuration(a.duration_seconds)} />
         {a.distance_meters > 0 && (
-          <Stat label="Distance" value={round(a.distance_meters / 1000, 2)} unit="km" />
+          <Stat label="Distance" value={round(metersToMiles(a.distance_meters), 2)} unit="mi" />
         )}
         {a.average_speed > 0 && isRunning && (
           <Stat label="Pace" value={formatPace(a.average_speed)} />
         )}
         {a.average_speed > 0 && !isRunning && a.distance_meters > 0 && (
-          <Stat label="Speed" value={round(a.average_speed * 3.6, 1)} unit="km/h" />
+          <Stat label="Speed" value={round(msToMph(a.average_speed), 1)} unit="mph" />
         )}
         <Stat label="Avg HR" value={a.average_hr ? Math.round(a.average_hr) : null} unit="bpm" />
         <Stat label="Max HR" value={a.max_hr ? Math.round(a.max_hr) : null} unit="bpm" />
@@ -229,7 +229,7 @@ export function ActivityDetail({ id }: { id: number }) {
                 <tr key={s.split_number}>
                   <td style="padding:0.375rem 0.75rem">{s.split_number}</td>
                   <td style="padding:0.375rem 0.75rem">
-                    {s.distance_meters ? `${round(s.distance_meters / 1000, 2)} km` : "--"}
+                    {s.distance_meters ? `${round(metersToMiles(s.distance_meters), 2)} mi` : "--"}
                   </td>
                   <td style="padding:0.375rem 0.75rem">
                     {isRunning && s.average_speed
