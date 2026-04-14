@@ -6,17 +6,16 @@ Runs after each cron sync. Exports today + yesterday from every table
 and upserts via wrangler d1 execute.
 """
 
-import json
 import sqlite3
-import subprocess
 import sys
 import tempfile
 from datetime import date, timedelta
 from pathlib import Path
 
+from d1_helpers import execute_sql_file
+
 PROJECT_DIR = Path(__file__).parent
 DB_PATH = PROJECT_DIR / "garmin.db"
-WRANGLER = "npx"
 D1_NAME = "garmin-health"
 
 # Tables keyed by calendar_date
@@ -161,20 +160,11 @@ def main():
 
     print(f"Pushing {len(all_sql)} statements to D1...")
 
-    result = subprocess.run(
-        [WRANGLER, "wrangler", "d1", "execute", D1_NAME, "--remote", f"--file={tmp_path}"],
-        cwd=str(PROJECT_DIR / "web"),
-        capture_output=True,
-        text=True,
-    )
-
-    Path(tmp_path).unlink()
-
-    if result.returncode != 0:
-        print(f"Error pushing to D1:\n{result.stderr}")
+    try:
+        execute_sql_file(Path(tmp_path), D1_NAME, PROJECT_DIR / "web", label="sync_to_d1")
+    except RuntimeError as e:
+        print(str(e))
         sys.exit(1)
-
-    print(f"Successfully pushed {len(all_sql)} statements to D1.")
 
 
 if __name__ == "__main__":

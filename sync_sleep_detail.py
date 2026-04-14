@@ -6,10 +6,11 @@ and push to D1 sleep detail tables.
 
 import json
 import sqlite3
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+from d1_helpers import execute_sql_file
 
 PROJECT_DIR = Path(__file__).parent
 DB_PATH = PROJECT_DIR / "garmin.db"
@@ -122,20 +123,11 @@ def main():
 
     print(f"Pushing {len(stmts)} sleep detail statements to D1...")
 
-    result = subprocess.run(
-        ["npx", "wrangler", "d1", "execute", D1_NAME, "--remote", f"--file={tmp_path}"],
-        cwd=str(PROJECT_DIR / "web"),
-        capture_output=True,
-        text=True,
-    )
-
-    Path(tmp_path).unlink()
-
-    if result.returncode != 0:
-        print(f"Error: {result.stderr}")
+    try:
+        execute_sql_file(Path(tmp_path), D1_NAME, PROJECT_DIR / "web", label="sync_sleep_detail")
+    except RuntimeError as e:
+        print(str(e))
         sys.exit(1)
-
-    print(f"Successfully pushed {len(stmts)} sleep detail statements.")
 
 
 if __name__ == "__main__":
