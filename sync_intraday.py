@@ -36,14 +36,14 @@ def extract_intraday(conn, calendar_date=None):
         if not raw:
             continue
         data = json.loads(raw)
-        for entry in data.get("stressValuesArray", []):
+        for entry in (data.get("stressValuesArray") or []):
             if isinstance(entry, list) and len(entry) >= 2 and entry[1] >= 0:
                 statements.append(
                     f"INSERT OR REPLACE INTO intraday_stress (calendar_date, timestamp_gmt, value) "
                     f"VALUES ({escape(cal_date)}, {entry[0]}, {entry[1]});"
                 )
         # Body battery from same raw_json
-        for entry in data.get("bodyBatteryValuesArray", []):
+        for entry in (data.get("bodyBatteryValuesArray") or []):
             if isinstance(entry, list) and len(entry) >= 3 and entry[2] is not None:
                 status_val = entry[1] if entry[1] is not None else "unknown"
                 statements.append(
@@ -57,7 +57,7 @@ def extract_intraday(conn, calendar_date=None):
         if not raw:
             continue
         data = json.loads(raw)
-        for entry in data.get("heartRateValues", []):
+        for entry in (data.get("heartRateValues") or []):
             if isinstance(entry, list) and len(entry) >= 2 and entry[1] is not None and entry[1] > 0:
                 statements.append(
                     f"INSERT OR REPLACE INTO intraday_heart_rate (calendar_date, timestamp_gmt, value) "

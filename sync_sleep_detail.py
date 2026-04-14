@@ -54,42 +54,42 @@ def extract_sleep_detail(conn, calendar_date=None):
         )
 
         # sleep_levels
-        for lvl in data.get("sleepLevels", []):
+        for lvl in (data.get("sleepLevels") or []):
             statements.append(
                 f"INSERT OR REPLACE INTO sleep_levels (calendar_date, start_gmt, end_gmt, activity_level) "
                 f"VALUES ({escape(cal_date)}, {escape(lvl['startGMT'])}, {escape(lvl['endGMT'])}, {escape(lvl['activityLevel'])});"
             )
 
         # sleep_heart_rate
-        for hr in data.get("sleepHeartRate", []):
+        for hr in (data.get("sleepHeartRate") or []):
             statements.append(
                 f"INSERT OR REPLACE INTO sleep_heart_rate (calendar_date, timestamp_gmt, value) "
                 f"VALUES ({escape(cal_date)}, {escape(hr['startGMT'])}, {escape(hr['value'])});"
             )
 
         # sleep_hrv
-        for hrv in data.get("hrvData", []):
+        for hrv in (data.get("hrvData") or []):
             statements.append(
                 f"INSERT OR REPLACE INTO sleep_hrv (calendar_date, timestamp_gmt, value) "
                 f"VALUES ({escape(cal_date)}, {escape(hrv['startGMT'])}, {escape(hrv['value'])});"
             )
 
         # sleep_stress
-        for s in data.get("sleepStress", []):
+        for s in (data.get("sleepStress") or []):
             statements.append(
                 f"INSERT OR REPLACE INTO sleep_stress (calendar_date, timestamp_gmt, value) "
                 f"VALUES ({escape(cal_date)}, {escape(s['startGMT'])}, {escape(s['value'])});"
             )
 
         # sleep_body_battery
-        for bb in data.get("sleepBodyBattery", []):
+        for bb in (data.get("sleepBodyBattery") or []):
             statements.append(
                 f"INSERT OR REPLACE INTO sleep_body_battery (calendar_date, timestamp_gmt, value) "
                 f"VALUES ({escape(cal_date)}, {escape(bb['startGMT'])}, {escape(bb['value'])});"
             )
 
         # sleep_respiration
-        for r in data.get("wellnessEpochRespirationDataDTOList", []):
+        for r in (data.get("wellnessEpochRespirationDataDTOList") or []):
             statements.append(
                 f"INSERT OR REPLACE INTO sleep_respiration (calendar_date, timestamp_gmt, value) "
                 f"VALUES ({escape(cal_date)}, {escape(r['startTimeGMT'])}, {escape(r['respirationValue'])});"
