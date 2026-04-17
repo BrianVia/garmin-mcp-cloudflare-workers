@@ -1,5 +1,5 @@
-import { useState } from "preact/hooks";
 import { useApi } from "../lib/hooks";
+import { useQueryState } from "../lib/useQueryState";
 import { round, formatDate } from "../lib/format";
 import { MetricCard } from "../components/MetricCard";
 import { Sparkline } from "../components/Sparkline";
@@ -204,7 +204,7 @@ function DayDrilldown({ date }: { date: string }) {
 }
 
 export function StressBodyBattery() {
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useQueryState("date", "");
   const { data: stressData, loading: l1 } = useApi<StressRow[]>("/health/stress", { days: "30" });
   const { data: batteryData, loading: l2 } = useApi<BatteryRow[]>("/health/body-battery", { days: "30" });
 
@@ -254,7 +254,7 @@ export function StressBodyBattery() {
           {[...stressData].reverse().map((d) => (
             <button
               key={d.calendar_date}
-              onClick={() => setSelectedDate(selectedDate === d.calendar_date ? null : d.calendar_date)}
+              onClick={() => setSelectedDate(selectedDate === d.calendar_date ? "" : d.calendar_date)}
               class={selectedDate === d.calendar_date ? "active" : ""}
             >
               {formatDate(d.calendar_date)}

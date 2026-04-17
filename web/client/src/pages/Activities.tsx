@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
 import { useApi } from "../lib/hooks";
+import { useQueryState } from "../lib/useQueryState";
 import { formatDate, formatDistanceKm, formatDuration, formatPace, kmToMiles, round } from "../lib/format";
 import { MetricCard } from "../components/MetricCard";
 import { ActivityDetail } from "../components/ActivityDetail";
@@ -27,7 +28,7 @@ interface ActivityType {
 }
 
 export function Activities() {
-  const [typeFilter, setTypeFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useQueryState("type", "");
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const { data: types } = useApi<ActivityType[]>("/activities/types");
   const { data, loading } = useApi<Activity[]>("/activities", {

@@ -1,5 +1,5 @@
-import { useState } from "preact/hooks";
 import { useApi } from "../lib/hooks";
+import { useQueryState } from "../lib/useQueryState";
 import { round, formatDate } from "../lib/format";
 import { MetricCard } from "../components/MetricCard";
 import { Sparkline } from "../components/Sparkline";
@@ -151,7 +151,7 @@ function HrDayChart({ data, height = 120 }: { data: IntradayPoint[]; height?: nu
 }
 
 export function HeartRate() {
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useQueryState("date", "");
   const { data, loading } = useApi<HrRow[]>("/health/heart-rate", { days: "30" });
   const { data: detail } = useApi<HrDetail | null>(
     selectedDate ? `/health/heart-rate/${selectedDate}` : "/health/heart-rate",
@@ -200,7 +200,7 @@ export function HeartRate() {
         {[...data].reverse().map((d) => (
           <button
             key={d.calendar_date}
-            onClick={() => setSelectedDate(selectedDate === d.calendar_date ? null : d.calendar_date)}
+            onClick={() => setSelectedDate(selectedDate === d.calendar_date ? "" : d.calendar_date)}
             class={selectedDate === d.calendar_date ? "active" : ""}
           >
             {formatDate(d.calendar_date)}

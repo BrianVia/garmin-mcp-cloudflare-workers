@@ -1,5 +1,5 @@
-import { useState } from "preact/hooks";
 import { useApi } from "../lib/hooks";
+import { useQueryState } from "../lib/useQueryState";
 import { round, formatDate, formatMinutes } from "../lib/format";
 import { MetricCard } from "../components/MetricCard";
 import { SleepBar } from "../components/SleepBar";
@@ -161,7 +161,7 @@ function NightDetail({ date }: { date: string }) {
 }
 
 export function Sleep() {
-  const [expandedDate, setExpandedDate] = useState<string | null>(null);
+  const [expandedDate, setExpandedDate] = useQueryState("date", "");
   const { data, loading } = useApi<SleepRow[]>("/health/sleep", { days: "30" });
   const { data: consistency } = useApi<SleepTimeRow[]>("/health/sleep/consistency", { days: "30" });
 
@@ -246,7 +246,7 @@ export function Sleep() {
                 <tr
                   key={d.calendar_date}
                   onClick={() =>
-                    setExpandedDate(expandedDate === d.calendar_date ? null : d.calendar_date)
+                    setExpandedDate(expandedDate === d.calendar_date ? "" : d.calendar_date)
                   }
                   style="cursor:pointer"
                 >

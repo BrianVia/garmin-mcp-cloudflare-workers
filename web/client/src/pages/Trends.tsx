@@ -1,5 +1,5 @@
-import { useState } from "preact/hooks";
 import { useApi } from "../lib/hooks";
+import { useQueryState } from "../lib/useQueryState";
 import { round } from "../lib/format";
 import { InteractiveChart } from "../components/InteractiveChart";
 
@@ -88,9 +88,9 @@ function TrendChart({ data, color, label, unit, height = 140 }: { data: Array<{ 
 }
 
 export function Trends() {
-  const [metric, setMetric] = useState("resting_hr");
-  const [period, setPeriod] = useState("daily");
-  const [compare, setCompare] = useState("");
+  const [metric, setMetric] = useQueryState("metric", "resting_hr");
+  const [period, setPeriod] = useQueryState("period", "daily");
+  const [compare, setCompare] = useQueryState("compare", "");
 
   const { data, loading } = useApi<TrendData>(`/trends/${metric}`, { period });
   const { data: compareData } = useApi<TrendData | null>(
