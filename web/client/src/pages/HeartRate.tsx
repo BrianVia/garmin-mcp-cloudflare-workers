@@ -4,6 +4,7 @@ import { round, formatDate } from "../lib/format";
 import { MetricCard } from "../components/MetricCard";
 import { Sparkline } from "../components/Sparkline";
 import { InteractiveChart } from "../components/InteractiveChart";
+import { CopyButtons } from "../components/CopyButtons";
 
 interface HrRow {
   calendar_date: string;
@@ -20,7 +21,7 @@ interface HrDetail {
   heart_rate: IntradayPoint[];
 }
 
-const ZONE_COLORS = ["#94a3b8", "#3b82f6", "#22c55e", "#f59e0b", "#ef4444"];
+const ZONE_COLORS = ["#7b8fa1", "#5aa39b", "#7ea067", "#d4a757", "#d2554f"];
 const ZONE_BOUNDARIES = [97, 116, 136, 155, 175, 194]; // from hr_zones table
 
 function formatTime(ts: number): string {
@@ -32,6 +33,43 @@ function getZone(hr: number): number {
     if (hr >= (ZONE_BOUNDARIES[i] ?? 0)) return Math.min(i, 4);
   }
   return 0;
+}
+
+function buildHrMarkdown(data: HrDetail & { date: string }): string {
+  const lines: string[] = [];
+  lines.push(`# Heart Rate — ${data.date}`);
+  lines.push("");
+  lines.push("## Summary");
+  const s = data.summary;
+  const stat = (label: string, value: string | number | null | undefined) => {
+    if (value == null || value === "" || value === 0) return;
+    lines.push(`- **${label}:** ${value}`);
+  };
+  if (s) {
+    stat("Resting", s.resting_hr ? `${s.resting_hr} bpm` : null);
+    stat("Min", s.min_hr ? `${s.min_hr} bpm` : null);
+    stat("Max", s.max_hr ? `${s.max_hr} bpm` : null);
+    stat("Avg", s.avg_hr ? `${round(s.avg_hr)} bpm` : null);
+  }
+  if (data.heart_rate?.length) {
+    const vals = data.heart_rate.map((p) => p.value).filter((v) => v != null && isFinite(v));
+    const intradayAvg = vals.reduce((a, b) => a + b, 0) / vals.length;
+    stat("Intraday avg", `${round(intradayAvg)} bpm over ${vals.length} samples`);
+
+    const zoneTimes = [0, 0, 0, 0, 0];
+    for (const p of data.heart_rate) zoneTimes[getZone(p.value)]!++;
+    const total = vals.length;
+    lines.push("", "## HR Zone Distribution");
+    lines.push(`| Zone | Range | Time |`);
+    lines.push(`|------|-------|------|`);
+    for (let i = 0; i < 5; i++) {
+      if ((zoneTimes[i] ?? 0) === 0) continue;
+      const range = `${ZONE_BOUNDARIES[i]}-${ZONE_BOUNDARIES[i + 1] || "max"}`;
+      const pct = ((zoneTimes[i]! / total) * 100).toFixed(0);
+      lines.push(`| Z${i + 1} | ${range} bpm | ${pct}% |`);
+    }
+  }
+  return lines.join("\n");
 }
 
 function HrDayChart({ data, height = 120 }: { data: IntradayPoint[]; height?: number }) {
@@ -85,12 +123,12 @@ function HrDayChart({ data, height = 120 }: { data: IntradayPoint[]; height?: nu
       {/* Zone distribution */}
       <div class="chart-container">
         <h3>Time in HR Zones</h3>
-        <div style="display:flex;height:28px;border-radius:6px;overflow:hidden;gap:2px;margin-bottom:0.75rem">
+        <div style="display:flex;height:28px;overflow:hidden;gap:1px;margin-bottom:0.875rem;background:var(--ink-raised)">
           {zoneTimes.map((count, i) =>
             count > 0 ? (
               <div
                 key={i}
-                style={`width:${(count / totalPts) * 100}%;background:${ZONE_COLORS[i]};display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:600;color:white;min-width:20px`}
+                style={`width:${(count / totalPts) * 100}%;background:${ZONE_COLORS[i]};display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:0.6875rem;font-weight:500;color:var(--ink);letter-spacing:0.05em;min-width:22px`}
               >
                 Z{i + 1}
               </div>
@@ -128,8 +166,15 @@ export function HeartRate() {
   return (
     <div>
       <div class="page-header">
-        <h1>Heart Rate</h1>
-        <p>Last 30 days — click a date for 24h detail</p>
+        <div class="eyebrow">The Engine</div>
+        <h1>
+          Heart <em>rate</em>
+        </h1>
+        <div class="dateline">
+          <span>Last 30 days</span>
+          <span class="sep">/</span>
+          <span class="accent">Select a date for 24h detail</span>
+        </div>
       </div>
 
       <div class="cards">
@@ -151,15 +196,12 @@ export function HeartRate() {
       </div>
 
       {/* Date selector */}
-      <div style="display:flex;gap:0.375rem;flex-wrap:wrap;margin-bottom:1.5rem">
+      <div class="date-rail">
         {[...data].reverse().map((d) => (
           <button
             key={d.calendar_date}
             onClick={() => setSelectedDate(selectedDate === d.calendar_date ? null : d.calendar_date)}
-            style={`padding:0.375rem 0.75rem;border-radius:6px;font-size:0.8rem;cursor:pointer;border:1px solid var(--border);transition:all 0.15s;
-              ${selectedDate === d.calendar_date
-                ? "background:var(--color-hr);color:white;border-color:var(--color-hr)"
-                : "background:var(--bg-card);color:var(--text-dim)"}`}
+            class={selectedDate === d.calendar_date ? "active" : ""}
           >
             {formatDate(d.calendar_date)}
           </button>
@@ -167,7 +209,10 @@ export function HeartRate() {
       </div>
 
       {selectedDate && detail && 'heart_rate' in detail && detail.heart_rate?.length > 0 && (
-        <HrDayChart data={detail.heart_rate} />
+        <>
+          <CopyButtons data={{ ...detail, date: selectedDate }} buildMarkdown={buildHrMarkdown} />
+          <HrDayChart data={detail.heart_rate} />
+        </>
       )}
 
       <div class="table-wrap">

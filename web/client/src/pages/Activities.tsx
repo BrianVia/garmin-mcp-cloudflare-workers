@@ -43,20 +43,23 @@ export function Activities() {
   return (
     <div>
       <div class="page-header">
-        <h1>Activities</h1>
-        <p style="display:flex;gap:0.75rem;align-items:center;margin-top:0.5rem;flex-wrap:wrap">
+        <div class="eyebrow">Field Notes</div>
+        <h1>
+          The <em>ledger</em>
+        </h1>
+        <div class="dateline" style="margin-top:1rem">
           <select
             value={typeFilter}
             onChange={(e) => { setTypeFilter((e.target as HTMLSelectElement).value); setExpandedId(null); }}
-            style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.375rem 0.75rem;font-size:0.875rem"
           >
             <option value="">All types</option>
             {types?.map((t) => (
               <option key={t.type} value={t.type}>{t.type} ({t.count})</option>
             ))}
           </select>
-          <span style="color:var(--text-dim);font-size:0.8rem">Click a row for details</span>
-        </p>
+          <span class="sep">/</span>
+          <span class="accent">Click a row for detail</span>
+        </div>
       </div>
 
       {data && data.length > 0 && (

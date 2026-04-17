@@ -4,6 +4,7 @@ import { round, formatDate } from "../lib/format";
 import { MetricCard } from "../components/MetricCard";
 import { Sparkline } from "../components/Sparkline";
 import { InteractiveChart } from "../components/InteractiveChart";
+import { CopyButtons } from "../components/CopyButtons";
 
 interface StressRow {
   calendar_date: string;
@@ -104,24 +105,72 @@ function StressBreakdown({ low, med, high }: { low: number; med: number; high: n
   return (
     <div class="chart-container">
       <h3>Stress Breakdown</h3>
-      <div style="display:flex;height:32px;border-radius:6px;overflow:hidden;gap:2px;margin-bottom:0.75rem">
-        <div style={`width:${pct(low)}%;background:#22c55e;display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:600;color:white`}>
+      <div style="display:flex;height:28px;overflow:hidden;gap:1px;margin-bottom:0.875rem;background:var(--ink-raised)">
+        <div style={`width:${pct(low)}%;background:var(--moss);display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:0.6875rem;font-weight:500;color:var(--ink);letter-spacing:0.05em`}>
           {pct(low)}%
         </div>
-        <div style={`width:${pct(med)}%;background:#f59e0b;display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:600;color:white`}>
+        <div style={`width:${pct(med)}%;background:var(--ochre);display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:0.6875rem;font-weight:500;color:var(--ink);letter-spacing:0.05em`}>
           {pct(med)}%
         </div>
-        <div style={`width:${pct(high)}%;background:#ef4444;display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:600;color:white`}>
+        <div style={`width:${pct(high)}%;background:var(--crimson);display:flex;align-items:center;justify-content:center;font-family:var(--font-mono);font-size:0.6875rem;font-weight:500;color:var(--bone);letter-spacing:0.05em`}>
           {pct(high)}%
         </div>
       </div>
-      <div style="display:flex;gap:2rem;font-size:0.8rem">
-        <span style="color:#22c55e">Low: {fmt(low)}</span>
-        <span style="color:#f59e0b">Medium: {fmt(med)}</span>
-        <span style="color:#ef4444">High: {fmt(high)}</span>
+      <div style="display:flex;gap:2rem;font-family:var(--font-mono);font-size:0.75rem;letter-spacing:0.08em;text-transform:uppercase">
+        <span style="color:var(--moss)">Low · {fmt(low)}</span>
+        <span style="color:var(--ochre)">Medium · {fmt(med)}</span>
+        <span style="color:var(--crimson)">High · {fmt(high)}</span>
       </div>
     </div>
   );
+}
+
+function fmtSeconds(s: number): string {
+  const h = Math.floor(s / 3600);
+  const m = Math.round((s % 3600) / 60);
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+function buildStressMarkdown(data: DayDetail & { date: string }): string {
+  const lines: string[] = [];
+  lines.push(`# Stress & Body Battery — ${data.date}`);
+  lines.push("");
+
+  lines.push("## Stress");
+  const stat = (label: string, value: string | number | null | undefined) => {
+    if (value == null || value === "" || value === 0) return;
+    lines.push(`- **${label}:** ${value}`);
+  };
+  if (data.summary) {
+    stat("Average", data.summary.avg_stress);
+    stat("Maximum", data.summary.max_stress);
+    stat("Quality", data.summary.stress_qualifier);
+  }
+  if (data.daily) {
+    const low = data.daily.low_stress_seconds || 0;
+    const med = data.daily.medium_stress_seconds || 0;
+    const high = data.daily.high_stress_seconds || 0;
+    const total = low + med + high;
+    if (total > 0) {
+      const pct = (v: number) => `${((v / total) * 100).toFixed(0)}%`;
+      lines.push("", "### Stress Breakdown");
+      lines.push(`- **Low:** ${fmtSeconds(low)} (${pct(low)})`);
+      lines.push(`- **Medium:** ${fmtSeconds(med)} (${pct(med)})`);
+      lines.push(`- **High:** ${fmtSeconds(high)} (${pct(high)})`);
+    }
+  }
+
+  if (data.daily) {
+    lines.push("", "## Body Battery");
+    stat("Highest", data.daily.body_battery_highest);
+    stat("Lowest", data.daily.body_battery_lowest);
+    stat("At wake", data.daily.body_battery_at_wake);
+    stat("Most recent", data.daily.body_battery_most_recent);
+    stat("Charged", data.daily.body_battery_charged ? `+${data.daily.body_battery_charged}` : null);
+    stat("Drained", data.daily.body_battery_drained ? `-${data.daily.body_battery_drained}` : null);
+  }
+
+  return lines.join("\n");
 }
 
 function DayDrilldown({ date }: { date: string }) {
@@ -132,6 +181,7 @@ function DayDrilldown({ date }: { date: string }) {
 
   return (
     <div>
+      <CopyButtons data={{ ...data, date }} buildMarkdown={buildStressMarkdown} />
       {data.daily && (
         <StressBreakdown
           low={data.daily.low_stress_seconds || 0}
@@ -166,8 +216,15 @@ export function StressBodyBattery() {
   return (
     <div>
       <div class="page-header">
-        <h1>Stress & Body Battery</h1>
-        <p>Last 30 days — click a date for 24h detail</p>
+        <div class="eyebrow">Reservoirs</div>
+        <h1>
+          Stress &amp; <em>battery</em>
+        </h1>
+        <div class="dateline">
+          <span>Last 30 days</span>
+          <span class="sep">/</span>
+          <span class="accent">Select a date for 24h detail</span>
+        </div>
       </div>
 
       <div class="cards">
@@ -193,15 +250,12 @@ export function StressBodyBattery() {
 
       {/* Date selector */}
       {stressData && stressData.length > 0 && (
-        <div style="display:flex;gap:0.375rem;flex-wrap:wrap;margin-bottom:1.5rem">
+        <div class="date-rail">
           {[...stressData].reverse().map((d) => (
             <button
               key={d.calendar_date}
               onClick={() => setSelectedDate(selectedDate === d.calendar_date ? null : d.calendar_date)}
-              style={`padding:0.375rem 0.75rem;border-radius:6px;font-size:0.8rem;cursor:pointer;border:1px solid var(--border);transition:all 0.15s;
-                ${selectedDate === d.calendar_date
-                  ? "background:var(--accent);color:white;border-color:var(--accent)"
-                  : "background:var(--bg-card);color:var(--text-dim)"}`}
+              class={selectedDate === d.calendar_date ? "active" : ""}
             >
               {formatDate(d.calendar_date)}
             </button>

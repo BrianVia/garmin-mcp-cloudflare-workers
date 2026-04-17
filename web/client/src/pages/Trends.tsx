@@ -103,12 +103,14 @@ export function Trends() {
   return (
     <div>
       <div class="page-header">
-        <h1>Trends</h1>
-        <div style="display:flex;gap:0.75rem;margin-top:0.5rem;flex-wrap:wrap">
+        <div class="eyebrow">The Long View</div>
+        <h1>
+          Over <em>time</em>
+        </h1>
+        <div class="dateline" style="margin-top:1rem">
           <select
             value={metric}
             onChange={(e) => setMetric((e.target as HTMLSelectElement).value)}
-            style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.375rem 0.75rem;font-size:0.875rem"
           >
             {Object.entries(METRIC_GROUPS).map(([group, metrics]) => (
               <optgroup key={group} label={group}>
@@ -121,7 +123,6 @@ export function Trends() {
           <select
             value={period}
             onChange={(e) => setPeriod((e.target as HTMLSelectElement).value)}
-            style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.375rem 0.75rem;font-size:0.875rem"
           >
             <option value="daily">Daily</option>
             <option value="week">Weekly</option>
@@ -130,9 +131,8 @@ export function Trends() {
           <select
             value={compare}
             onChange={(e) => setCompare((e.target as HTMLSelectElement).value)}
-            style="background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.375rem 0.75rem;font-size:0.875rem"
           >
-            <option value="">Compare with...</option>
+            <option value="">Compare with…</option>
             {allMetrics.filter(([k]) => k !== metric).map(([k, v]) => (
               <option key={k} value={k}>{v}</option>
             ))}

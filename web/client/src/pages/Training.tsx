@@ -98,12 +98,21 @@ export function Training() {
   return (
     <div>
       <div class="page-header">
-        <h1>Training</h1>
-        {latestR?.feedback_short && (
-          <p style="color:var(--color-training);font-size:0.85rem">
-            {latestR.feedback_short.replace(/_/g, " ").toLowerCase().replace(/^\w/, (c: string) => c.toUpperCase())}
-          </p>
-        )}
+        <div class="eyebrow">Adaptation</div>
+        <h1>
+          The <em>work</em>
+        </h1>
+        <div class="dateline">
+          <span>Readiness, endurance, performance</span>
+          {latestR?.feedback_short && (
+            <>
+              <span class="sep">/</span>
+              <span class="accent">
+                {latestR.feedback_short.replace(/_/g, " ").toLowerCase()}
+              </span>
+            </>
+          )}
+        </div>
       </div>
 
       <div class="cards">

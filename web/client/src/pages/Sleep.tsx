@@ -6,6 +6,7 @@ import { SleepBar } from "../components/SleepBar";
 import { Sparkline } from "../components/Sparkline";
 import { SleepTimeline } from "../components/SleepTimeline";
 import { SleepConsistency } from "../components/SleepConsistency";
+import { CopyButtons } from "../components/CopyButtons";
 
 interface SleepRow {
   calendar_date: string;
@@ -76,6 +77,66 @@ function FeedbackBadge({ feedback, insight }: { feedback: string; insight: strin
   );
 }
 
+function seriesStats(points: Array<{ value: number }>) {
+  if (!points.length) return null;
+  const values = points.map((p) => p.value).filter((v) => v != null && isFinite(v));
+  if (!values.length) return null;
+  const sum = values.reduce((a, b) => a + b, 0);
+  return {
+    avg: sum / values.length,
+    min: Math.min(...values),
+    max: Math.max(...values),
+    count: values.length,
+  };
+}
+
+function fmtTime(ts: number): string {
+  return new Date(ts).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+}
+
+function buildSleepMarkdown(data: SleepDetail & { date: string }): string {
+  const s = data.summary;
+  const lines: string[] = [];
+
+  lines.push(`# Sleep — ${data.date}`);
+  if (data.times) {
+    lines.push(`*${fmtTime(data.times.sleep_start_local)} → ${fmtTime(data.times.sleep_end_local)}*`);
+  }
+  lines.push("");
+
+  lines.push("## Summary");
+  const stat = (label: string, value: string | number | null | undefined) => {
+    if (value == null || value === "" || value === 0) return;
+    lines.push(`- **${label}:** ${value}`);
+  };
+  stat("Total", s?.sleep_hours ? `${round(s.sleep_hours)} hrs` : null);
+  stat("Deep", s?.deep_min ? formatMinutes(s.deep_min) : null);
+  stat("Light", s?.light_min ? formatMinutes(s.light_min) : null);
+  stat("REM", s?.rem_min ? formatMinutes(s.rem_min) : null);
+  stat("Awake", s?.awake_min ? formatMinutes(s.awake_min) : null);
+  stat("Avg HR", s?.average_hr_sleep ? `${Math.round(s.average_hr_sleep)} bpm` : null);
+  stat("Avg SpO2", s?.average_spo2 ? `${round(s.average_spo2)}%` : null);
+  stat("Sleep stress", s?.avg_sleep_stress ? round(s.avg_sleep_stress) : null);
+  stat("Quality", s?.sleep_score_feedback);
+  stat("Insight", s?.sleep_score_insight && s.sleep_score_insight !== "NONE" ? s.sleep_score_insight : null);
+
+  const addSeries = (label: string, series: Array<{ value: number }>, unit = "") => {
+    const st = seriesStats(series);
+    if (!st) return;
+    lines.push(`- **${label}:** avg ${round(st.avg)}${unit} · min ${round(st.min)}${unit} · max ${round(st.max)}${unit}`);
+  };
+  if (data.heart_rate.length) {
+    lines.push("", "## Overnight Series");
+    addSeries("HR", data.heart_rate, " bpm");
+    addSeries("HRV", data.hrv, " ms");
+    addSeries("Stress", data.stress);
+    addSeries("Body Battery", data.body_battery);
+    addSeries("Respiration", data.respiration, " rpm");
+  }
+
+  return lines.join("\n");
+}
+
 function NightDetail({ date }: { date: string }) {
   const { data, loading } = useApi<SleepDetail>(`/health/sleep/${date}`);
 
@@ -84,6 +145,7 @@ function NightDetail({ date }: { date: string }) {
 
   return (
     <div style="padding:1rem 1.25rem 1.25rem;border-top:1px solid var(--border)">
+      <CopyButtons data={{ ...data, date }} buildMarkdown={buildSleepMarkdown} />
       <SleepTimeline
         levels={data.levels}
         heartRate={data.heart_rate}
@@ -114,8 +176,15 @@ export function Sleep() {
   return (
     <div>
       <div class="page-header">
-        <h1>Sleep</h1>
-        <p>Last 30 days — click a row for night detail</p>
+        <div class="eyebrow">Nocturnal Record</div>
+        <h1>
+          Hours <em>asleep</em>
+        </h1>
+        <div class="dateline">
+          <span>Last 30 days</span>
+          <span class="sep">/</span>
+          <span class="accent">Click a row for night detail</span>
+        </div>
       </div>
 
       <div class="cards">

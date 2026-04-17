@@ -1,8 +1,10 @@
+import { useState } from "preact/hooks";
 import { useApi } from "../lib/hooks";
-import { round, formatDate, formatDistanceKm, formatMinutes } from "../lib/format";
+import { round, formatDate, formatDistanceKm } from "../lib/format";
 import { MetricCard } from "../components/MetricCard";
 import { Sparkline } from "../components/Sparkline";
 import { SleepBar } from "../components/SleepBar";
+import { ActivityDetail } from "../components/ActivityDetail";
 
 interface DailyRow {
   calendar_date: string;
@@ -88,29 +90,31 @@ function StressBar({ low, med, high }: { low: number; med: number; high: number 
   if (!total) return null;
   const pct = (v: number) => `${((v / total) * 100).toFixed(0)}%`;
   return (
-    <div style="display:flex;height:8px;border-radius:4px;overflow:hidden;gap:1px;margin-top:0.5rem">
-      <div style={`width:${pct(low)};background:#22c55e`} title={`Low: ${Math.round(low / 60)}m`} />
-      <div style={`width:${pct(med)};background:#f59e0b`} title={`Med: ${Math.round(med / 60)}m`} />
-      <div style={`width:${pct(high)};background:#ef4444`} title={`High: ${Math.round(high / 60)}m`} />
+    <div style="display:flex;height:6px;border-radius:2px;overflow:hidden;gap:1px;margin-top:0.5rem;background:var(--ink-raised)">
+      <div style={`width:${pct(low)};background:var(--moss)`} title={`Low: ${Math.round(low / 60)}m`} />
+      <div style={`width:${pct(med)};background:var(--ochre)`} title={`Med: ${Math.round(med / 60)}m`} />
+      <div style={`width:${pct(high)};background:var(--crimson)`} title={`High: ${Math.round(high / 60)}m`} />
     </div>
   );
 }
 
-function ProgressRing({ value, goal, color }: { value: number; goal: number; color: string }) {
+function ProgressArc({ value, goal, color }: { value: number; goal: number; color: string }) {
   const pct = Math.min((value / goal) * 100, 100);
-  const r = 18;
+  const r = 22;
   const circ = 2 * Math.PI * r;
   const offset = circ - (pct / 100) * circ;
   return (
-    <svg width="44" height="44" style="margin-top:0.5rem">
-      <circle cx="22" cy="22" r={r} fill="none" stroke="var(--border)" stroke-width="4" />
+    <svg width="56" height="56" style="margin-top:0.5rem" viewBox="0 0 56 56">
+      <circle cx="28" cy="28" r={r} fill="none" stroke="var(--rule-2)" stroke-width="2" />
       <circle
-        cx="22" cy="22" r={r} fill="none" stroke={color} stroke-width="4"
+        cx="28" cy="28" r={r} fill="none" stroke={color} stroke-width="2"
         stroke-dasharray={circ} stroke-dashoffset={offset}
-        stroke-linecap="round" transform="rotate(-90 22 22)"
+        stroke-linecap="round" transform="rotate(-90 28 28)"
+        style="transition:stroke-dashoffset 0.8s cubic-bezier(0.2,0.7,0.2,1)"
       />
-      <text x="22" y="22" text-anchor="middle" dominant-baseline="central"
-        fill={color} font-size="10" font-weight="600">
+      <text x="28" y="28" text-anchor="middle" dominant-baseline="central"
+        fill={color} font-size="11" font-family="var(--font-mono)" font-weight="500"
+        letter-spacing="0.02em">
         {Math.round(pct)}%
       </text>
     </svg>
@@ -131,11 +135,33 @@ function hrvStatusBadge(status?: string) {
   return <span class={`badge ${cls}`}>{status}</span>;
 }
 
+function scoreTone(score: number | undefined): string {
+  if (score == null) return "";
+  if (score >= 75) return "teal";
+  if (score >= 50) return "ochre";
+  if (score >= 25) return "rust";
+  return "crimson";
+}
+
+function readinessPhrase(level?: string): { text: string; em: string } {
+  if (!level) return { text: "Signal holds steady,", em: "day unfolding." };
+  const map: Record<string, { text: string; em: string }> = {
+    PRIME: { text: "Every system green —", em: "chase something hard." },
+    PRODUCTIVE: { text: "Well-rested and sharp,", em: "do the work." },
+    MAINTAINING: { text: "Body holding the line —", em: "stay the course." },
+    RECOVERY: { text: "Recovery in progress —", em: "move gently." },
+    LOW: { text: "Reserves are thin,", em: "today is an easy day." },
+    POOR: { text: "Strain accumulated —", em: "rest is the training." },
+  };
+  return map[level] ?? { text: "Reading the tea leaves,", em: "see signals below." };
+}
+
 export function Dashboard() {
   const { data: dash, loading: l1 } = useApi<DashboardData>("/health/dashboard");
-  const { data: activities, loading: l2 } = useApi<Activity[]>("/activities", { limit: "5" });
+  const { data: activities, loading: l2 } = useApi<Activity[]>("/activities", { limit: "6" });
+  const [expandedId, setExpandedId] = useState<number | null>(null);
 
-  if (l1 || l2) return <div class="loading">Loading...</div>;
+  if (l1 || l2) return <div class="loading">Pulling your data</div>;
   if (!dash) return <div class="loading">No data</div>;
 
   const latest = dash.daily[dash.daily.length - 1];
@@ -148,80 +174,127 @@ export function Dashboard() {
   const intensityMin = latest ? (latest.moderate_intensity_minutes || 0) + (latest.vigorous_intensity_minutes || 0) : 0;
   const intensityGoal = latest?.intensity_minutes_goal || 150;
 
+  const readinessScore = latestTraining?.score != null ? Math.round(latestTraining.score) : null;
+  const tone = scoreTone(readinessScore ?? undefined);
+  const phrase = readinessPhrase(latestTraining?.level);
+
+  const dateStr = latest
+    ? new Date(latest.calendar_date + "T00:00:00").toLocaleDateString("en-US", {
+        weekday: "long", month: "long", day: "numeric", year: "numeric",
+      })
+    : "";
+
   return (
     <div>
       <div class="page-header">
-        <h1>Dashboard</h1>
-        <p>
-          {latest && (
-            <span style="color:var(--text-dim);font-size:0.85rem">
-              {new Date(latest.calendar_date + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}
-            </span>
-          )}
+        <div class="eyebrow">Daily Digest</div>
+        <h1>
+          Today's <em>reading</em>
+        </h1>
+        <div class="dateline">
+          <span>{dateStr}</span>
           {latestTraining?.feedback_short && (
-            <span style="color:var(--color-training);font-size:0.85rem;margin-left:0.75rem">
-              {latestTraining.feedback_short.replace(/_/g, " ").toLowerCase().replace(/^\w/, (c: string) => c.toUpperCase())}
-            </span>
+            <>
+              <span class="sep">/</span>
+              <span class="accent">
+                {latestTraining.feedback_short.replace(/_/g, " ").toLowerCase()}
+              </span>
+            </>
           )}
-        </p>
+          <span class="sep">/</span>
+          <span>{dash.daily.length}-day window</span>
+        </div>
       </div>
 
-      {/* Row 1: Key health metrics */}
+      {/* HERO — Training Readiness as editorial focal point */}
+      <section class="hero">
+        <div class="hero-main">
+          <div class="hero-label">Training Readiness</div>
+          <div class="hero-figure">
+            <span style={tone ? `color:var(--${tone === "teal" ? "teal" : tone === "ochre" ? "ochre" : tone === "rust" ? "rust" : "crimson"})` : undefined}>
+              {readinessScore ?? "—"}
+            </span>
+            <span class="slash">/</span>
+            <span class="denom">100</span>
+          </div>
+          <div class="hero-pullquote">
+            {phrase.text} <em>{phrase.em}</em>
+          </div>
+          <div style="display:flex;gap:0.5rem;margin-top:1.25rem;align-items:center;flex-wrap:wrap">
+            {levelBadge(latestTraining?.level)}
+            {latestTraining?.recovery_time != null && (
+              <span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--ash);letter-spacing:0.1em;text-transform:uppercase">
+                Recovery · {Math.round(latestTraining.recovery_time)}h
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div class="hero-side">
+          <div class="hero-kpi">
+            <div class={`kpi-num ${latestHrv?.status === "BALANCED" ? "teal" : latestHrv?.status === "LOW" ? "crimson" : "ochre"}`}>
+              {latestHrv?.last_night ?? latestHrv?.weekly_avg ?? "—"}
+            </div>
+            <div class="kpi-meta">
+              <div class="kpi-label">HRV — overnight</div>
+              <div class="kpi-sub">
+                {latestHrv
+                  ? `baseline ${Math.round(latestHrv.baseline_low || 0)}–${Math.round(latestHrv.baseline_upper || 0)} ms · ${latestHrv.status?.toLowerCase()}`
+                  : "—"}
+              </div>
+            </div>
+          </div>
+
+          <div class="hero-kpi">
+            <div class="kpi-num indigo">
+              {latestSleep?.sleep_hours != null ? round(latestSleep.sleep_hours) : "—"}
+              {latestSleep?.sleep_hours != null && <span style="font-size:0.5em;color:var(--ash);margin-left:0.125em">h</span>}
+            </div>
+            <div class="kpi-meta">
+              <div class="kpi-label">Sleep — last night</div>
+              <div class="kpi-sub">
+                {latestSleep
+                  ? `deep ${Math.round(latestSleep.deep_min)}m · rem ${Math.round(latestSleep.rem_min)}m`
+                  : "—"}
+              </div>
+            </div>
+          </div>
+
+          <div class="hero-kpi">
+            <div class="kpi-num crimson">
+              {latest?.resting_heart_rate ?? "—"}
+            </div>
+            <div class="kpi-meta">
+              <div class="kpi-label">Resting HR</div>
+              <div class="kpi-sub">
+                bpm · {dash.daily.filter((d) => d.resting_heart_rate).length}-day data
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Signals section */}
+      <div class="section-rule">
+        <div class="section-rule-num">I.</div>
+        <div class="section-rule-title">Signals</div>
+        <div class="section-rule-line"></div>
+        <div class="section-rule-meta">{dash.daily.length} days</div>
+      </div>
+
       <div class="cards">
-        <MetricCard
-          label="Training Readiness"
-          value={latestTraining?.score != null ? Math.round(latestTraining.score) : "--"}
-          color="var(--color-training)"
-          href="/training"
-          sub={latestTraining?.recovery_time ? `Recovery: ${Math.round(latestTraining.recovery_time)}h` : ""}
-        >
-          {levelBadge(latestTraining?.level)}
-          <Sparkline
-            data={dash.training.map((r) => r.score).filter(Boolean) as number[]}
-            color="var(--color-training)"
-          />
-        </MetricCard>
-
-        <MetricCard
-          label="HRV"
-          value={latestHrv?.last_night ?? latestHrv?.weekly_avg ?? "--"}
-          unit="ms"
-          color="var(--color-hrv)"
-          href="/training"
-          sub={latestHrv ? `Weekly: ${round(latestHrv.weekly_avg)} · Range: ${Math.round(latestHrv.baseline_low || 0)}-${Math.round(latestHrv.baseline_upper || 0)}` : ""}
-        >
-          {hrvStatusBadge(latestHrv?.status)}
-          <Sparkline
-            data={dash.hrv.map((h) => h.last_night || h.weekly_avg).filter(Boolean) as number[]}
-            color="var(--color-hrv)"
-          />
-        </MetricCard>
-
-        <MetricCard
-          label="Resting HR"
-          value={latest?.resting_heart_rate ?? "--"}
-          unit="bpm"
-          color="var(--color-hr)"
-          href="/heart-rate"
-        >
-          <Sparkline
-            data={dash.daily.map((d) => d.resting_heart_rate).filter(Boolean) as number[]}
-            color="var(--color-hr)"
-          />
-        </MetricCard>
-
         <MetricCard
           label="Body Battery"
           value={latestBattery?.highest ?? latest?.body_battery_highest ?? "--"}
-          color="var(--color-battery)"
+          color="var(--teal)"
           href="/stress"
-          sub={latestBattery ? `Wake: ${latestBattery.at_wake} · +${latestBattery.charged}/-${latestBattery.drained}` : ""}
+          sub={latestBattery ? `wake ${latestBattery.at_wake} · +${latestBattery.charged}/-${latestBattery.drained}` : ""}
         >
           <Sparkline
             data={dash.body_battery.length > 0
               ? dash.body_battery.map((b) => b.highest).filter(Boolean) as number[]
               : dash.daily.map((d) => d.body_battery_highest).filter(Boolean) as number[]}
-            color="var(--color-battery)"
+            color="var(--teal)"
           />
         </MetricCard>
 
@@ -229,7 +302,7 @@ export function Dashboard() {
           label="Sleep"
           value={latestSleep?.sleep_hours != null ? round(latestSleep.sleep_hours) : "--"}
           unit="hrs"
-          color="var(--color-sleep)"
+          color="var(--indigo)"
           href="/sleep"
         >
           {latestSleep && (
@@ -243,7 +316,7 @@ export function Dashboard() {
         <MetricCard
           label="Stress"
           value={latest?.average_stress_level ?? "--"}
-          color="var(--color-stress)"
+          color="var(--rust)"
           href="/stress"
         >
           {latest && (
@@ -255,74 +328,82 @@ export function Dashboard() {
           )}
           <Sparkline
             data={dash.daily.map((d) => d.average_stress_level).filter(Boolean) as number[]}
-            color="var(--color-stress)"
+            color="var(--rust)"
           />
         </MetricCard>
 
         <MetricCard
           label="Steps"
           value={latest?.total_steps?.toLocaleString() ?? "--"}
-          color="var(--color-steps)"
+          color="var(--moss)"
           href="/trends"
+          sub={latest?.daily_step_goal ? `goal ${latest.daily_step_goal.toLocaleString()}` : ""}
         >
           {latest?.daily_step_goal && (
-            <ProgressRing value={latest.total_steps || 0} goal={latest.daily_step_goal} color="var(--color-steps)" />
+            <ProgressArc value={latest.total_steps || 0} goal={latest.daily_step_goal} color="var(--moss)" />
           )}
         </MetricCard>
 
         <MetricCard
-          label="Intensity Min"
+          label="Intensity"
           value={intensityMin}
-          color="var(--accent)"
+          unit="min"
+          color="var(--rust)"
           href="/trends"
-          sub={`Goal: ${intensityGoal}`}
+          sub={`goal ${intensityGoal}`}
         >
-          <ProgressRing value={intensityMin} goal={intensityGoal} color="var(--accent)" />
+          <ProgressArc value={intensityMin} goal={intensityGoal} color="var(--rust)" />
         </MetricCard>
 
         <MetricCard
           label="Calories"
           value={latest?.total_kilocalories ? Math.round(latest.total_kilocalories).toLocaleString() : "--"}
           unit="kcal"
-          color="var(--color-stress)"
+          color="var(--ochre)"
           href="/trends"
-          sub={latest?.active_kilocalories ? `Active: ${Math.round(latest.active_kilocalories)}` : ""}
+          sub={latest?.active_kilocalories ? `active ${Math.round(latest.active_kilocalories)}` : ""}
         />
 
         {fa && (
           <MetricCard
             label="Fitness Age"
             value={round(fa.fitness_age, 0)}
-            color="var(--color-hrv)"
+            color="var(--teal)"
             href="/training"
-            sub={`Actual: ${fa.chronological_age}`}
+            sub={`actual ${fa.chronological_age}`}
           />
         )}
 
         <MetricCard
-          label="SpO2"
+          label="SpO₂"
           value={latest?.average_spo2 != null ? round(latest.average_spo2) : "--"}
           unit="%"
-          color="var(--color-spo2)"
+          color="var(--slate)"
           href="/trends"
         />
 
         <MetricCard
           label="Floors"
           value={latest?.floors_ascended != null ? round(latest.floors_ascended, 0) : "--"}
-          color="var(--color-steps)"
+          color="var(--moss)"
           href="/trends"
         >
           <Sparkline
             data={dash.daily.map((d) => d.floors_ascended).filter(Boolean) as number[]}
-            color="var(--color-steps)"
+            color="var(--moss)"
           />
         </MetricCard>
       </div>
 
       {/* Recent Activities */}
+      <div class="section-rule">
+        <div class="section-rule-num">II.</div>
+        <div class="section-rule-title">The ledger</div>
+        <div class="section-rule-line"></div>
+        <div class="section-rule-meta">latest {activities?.length ?? 0}</div>
+      </div>
+
       <div class="table-wrap">
-        <h3>Recent Activities</h3>
         <table>
           <thead>
             <tr>
@@ -336,14 +417,27 @@ export function Dashboard() {
           </thead>
           <tbody>
             {activities?.map((a) => (
-              <tr key={a.id}>
-                <td>{formatDate(a.date?.slice(0, 10) ?? "")}</td>
-                <td>{a.name}</td>
-                <td><span class="badge badge-blue">{a.type}</span></td>
-                <td>{a.duration_min ? `${Math.round(a.duration_min)}m` : "--"}</td>
-                <td>{a.distance_km ? formatDistanceKm(a.distance_km) : "--"}</td>
-                <td>{a.avg_hr ? `${Math.round(a.avg_hr)} bpm` : "--"}</td>
-              </tr>
+              <>
+                <tr
+                  key={a.id}
+                  onClick={() => setExpandedId(expandedId === a.id ? null : a.id)}
+                  style="cursor:pointer"
+                >
+                  <td>{formatDate(a.date?.slice(0, 10) ?? "")}</td>
+                  <td>{a.name}</td>
+                  <td><span class="badge badge-blue">{a.type}</span></td>
+                  <td>{a.duration_min ? `${Math.round(a.duration_min)}m` : "--"}</td>
+                  <td>{a.distance_km ? formatDistanceKm(a.distance_km) : "--"}</td>
+                  <td>{a.avg_hr ? `${Math.round(a.avg_hr)} bpm` : "--"}</td>
+                </tr>
+                {expandedId === a.id && (
+                  <tr key={`${a.id}-detail`}>
+                    <td colspan={6} style="padding:0;background:var(--paper)">
+                      <ActivityDetail id={a.id} />
+                    </td>
+                  </tr>
+                )}
+              </>
             ))}
           </tbody>
         </table>
