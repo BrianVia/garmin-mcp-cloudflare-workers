@@ -9,6 +9,11 @@ export function formatDuration(seconds: number): string {
 const KM_PER_MILE = 1.609344;
 const M_PER_MILE = 1609.344;
 const MS_TO_MPH = 2.2369362920544;
+const GRAMS_PER_LB = 453.59237;
+
+export function gramsToLbs(g: number): number {
+  return g / GRAMS_PER_LB;
+}
 
 export function kmToMiles(km: number): number {
   return km / KM_PER_MILE;

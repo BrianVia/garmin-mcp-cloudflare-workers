@@ -1,6 +1,6 @@
 import { useApi } from "../lib/hooks";
 import { useQueryState } from "../lib/useQueryState";
-import { round } from "../lib/format";
+import { round, gramsToLbs } from "../lib/format";
 import { InteractiveChart } from "../components/InteractiveChart";
 
 interface TrendData {
@@ -38,6 +38,20 @@ const METRIC_GROUPS = {
   },
 };
 
+// Raw DB values for these metrics aren't what users want to see. Transform
+// in the display layer; keep storage untouched.
+const METRIC_TRANSFORM: Record<string, { to: (v: number) => number; unit: string }> = {
+  weight: { to: gramsToLbs, unit: "lbs" },
+};
+
+function transformPoint(metric: string, value: number): number {
+  return METRIC_TRANSFORM[metric]?.to(value) ?? value;
+}
+
+function metricUnit(metric: string): string {
+  return METRIC_TRANSFORM[metric]?.unit ?? "";
+}
+
 const METRIC_COLORS: Record<string, string> = {
   resting_hr: "var(--color-hr)",
   stress: "var(--color-stress)",
@@ -65,6 +79,7 @@ function TrendChart({ data, color, label, unit, height = 140 }: { data: Array<{ 
   const values = data.map((d) => d.value);
   const min = Math.min(...values);
   const max = Math.max(...values);
+  const unitSuffix = unit ? ` ${unit}` : "";
 
   const points = data.map((d, i) => ({
     x: i / (data.length - 1),
@@ -75,12 +90,12 @@ function TrendChart({ data, color, label, unit, height = 140 }: { data: Array<{ 
   return (
     <div>
       <InteractiveChart
-        series={[{ points, color, label: label ?? "Value", unit: unit ?? "" }]}
+        series={[{ points, color, label: label ?? "Value", unit: unitSuffix }]}
         height={height}
       />
       <div style="display:flex;justify-content:space-between;font-size:0.65rem;color:var(--text-dim);margin-top:0.25rem">
         <span>{data[0]!.period}</span>
-        <span>min: {round(min)} · avg: {round(values.reduce((a, b) => a + b, 0) / values.length)} · max: {round(max)}</span>
+        <span>min: {round(min)}{unitSuffix} · avg: {round(values.reduce((a, b) => a + b, 0) / values.length)}{unitSuffix} · max: {round(max)}{unitSuffix}</span>
         <span>{data[data.length - 1]!.period}</span>
       </div>
     </div>
@@ -101,6 +116,22 @@ export function Trends() {
   const allMetrics = Object.entries(METRIC_GROUPS).flatMap(([_, metrics]) => Object.entries(metrics));
   const color = METRIC_COLORS[metric] ?? "var(--accent)";
   const compareColor = METRIC_COLORS[compare] ?? "var(--text-dim)";
+  const unit = metricUnit(metric);
+  const compareUnit = metricUnit(compare);
+
+  // Transform raw DB values (e.g. weight in grams → lbs) in the display layer.
+  const primary = data?.data
+    ?.filter((d) => d.value != null)
+    .map((d) => ({ ...d, value: transformPoint(metric, d.value) }));
+  const secondary =
+    compare && compareData && "data" in compareData
+      ? compareData.data
+          ?.filter((d: { value: number }) => d.value != null)
+          .map((d: { period: string; value: number; data_points: number }) => ({
+            ...d,
+            value: transformPoint(compare, d.value),
+          }))
+      : undefined;
 
   return (
     <div>
@@ -161,10 +192,10 @@ export function Trends() {
                 {data.data.length} data points
               </span>
             </div>
-            <TrendChart data={data.data.filter((d) => d.value != null)} color={color} label={allMetrics.find(([k]) => k === metric)?.[1]} />
-            {compare && compareData && 'data' in compareData && compareData.data?.length > 0 && (
+            <TrendChart data={primary ?? []} color={color} label={allMetrics.find(([k]) => k === metric)?.[1]} unit={unit} />
+            {secondary && secondary.length > 0 && (
               <div style="margin-top:1rem">
-                <TrendChart data={compareData.data.filter((d: { value: number }) => d.value != null)} color={compareColor} label={allMetrics.find(([k]) => k === compare)?.[1]} />
+                <TrendChart data={secondary} color={compareColor} label={allMetrics.find(([k]) => k === compare)?.[1]} unit={compareUnit} />
               </div>
             )}
           </div>
@@ -179,10 +210,12 @@ export function Trends() {
                 </tr>
               </thead>
               <tbody>
-                {[...data.data].reverse().slice(0, 50).map((d) => (
+                {[...(primary ?? [])].reverse().slice(0, 50).map((d) => (
                   <tr key={d.period}>
                     <td>{d.period}</td>
-                    <td style={`font-weight:600;color:${color}`}>{round(d.value)}</td>
+                    <td style={`font-weight:600;color:${color}`}>
+                      {round(d.value)}{unit && <span style="color:var(--text-dim);font-weight:400;margin-left:0.25rem">{unit}</span>}
+                    </td>
                     {period !== "daily" && <td>{d.data_points}</td>}
                   </tr>
                 ))}
