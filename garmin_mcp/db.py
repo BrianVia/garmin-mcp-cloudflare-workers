@@ -906,7 +906,9 @@ def upsert_hrv(conn: sqlite3.Connection, record: dict) -> None:
         {
             "calendar_date": record.get("calendarDate") or record.get("startTimestampLocal", "")[:10],
             "weekly_avg": record.get("weeklyAvg"),
-            "last_night": record.get("lastNight"),
+            # Garmin's GraphQL scalar omits `lastNight`; fall through to lastNightAvg
+            # (the overnight mean, semantically the same value users see in-app).
+            "last_night": record.get("lastNight") or record.get("lastNightAvg"),
             "last_night_avg": record.get("lastNightAvg") or record.get("lastNight5MinHigh"),
             "last_night_5min_high": record.get("lastNight5MinHigh"),
             "status": record.get("status"),

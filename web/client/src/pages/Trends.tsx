@@ -12,7 +12,8 @@ interface TrendData {
 const METRIC_GROUPS = {
   "Vitals": {
     resting_hr: "Resting Heart Rate",
-    hrv: "HRV (Weekly Avg)",
+    hrv: "HRV (overnight)",
+    hrv_weekly: "HRV (7-day avg)",
     spo2: "SpO2",
     respiration: "Respiration",
     weight: "Weight",
@@ -46,6 +47,7 @@ const METRIC_COLORS: Record<string, string> = {
   spo2: "var(--color-spo2)",
   training_readiness: "var(--color-training)",
   hrv: "var(--color-hrv)",
+  hrv_weekly: "var(--color-hrv)",
   weight: "var(--color-weight)",
   endurance_score: "var(--color-battery)",
   hill_score: "var(--color-stress)",
@@ -156,7 +158,7 @@ export function Trends() {
                 )}
               </h3>
               <span style="font-size:0.7rem;color:var(--text-dim)">
-                {data.data.length} data points · bold line = 7-pt moving avg
+                {data.data.length} data points
               </span>
             </div>
             <TrendChart data={data.data.filter((d) => d.value != null)} color={color} label={allMetrics.find(([k]) => k === metric)?.[1]} />

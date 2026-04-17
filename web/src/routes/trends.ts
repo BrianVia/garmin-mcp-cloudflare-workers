@@ -78,6 +78,17 @@ const METRICS: Record<string, { table: string; expr: string; notNull: string; da
   },
   hrv: {
     table: "hrv",
+    // Chart per-night HRV — this is what reacts to sleep, training, and stress.
+    // last_night_avg is the overnight mean; last_night falls through to it when
+    // Garmin's API omits the single-value field.
+    expr: "ROUND(AVG(COALESCE(last_night, last_night_avg)), 1)",
+    notNull: "COALESCE(last_night, last_night_avg) IS NOT NULL",
+    dateCol: "calendar_date",
+  },
+  hrv_weekly: {
+    table: "hrv",
+    // Garmin's own 7-day rolling average — heavily smoothed; useful only for
+    // long-horizon (month+) views, not daily/weekly trend reading.
     expr: "ROUND(AVG(weekly_avg), 1)",
     notNull: "weekly_avg IS NOT NULL",
     dateCol: "calendar_date",
