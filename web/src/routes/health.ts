@@ -391,11 +391,19 @@ healthRoutes.get("/personal-records", async (c) => {
 });
 
 // GET /api/health/weight
+// The weight table stores calendar_date as a Unix-epoch-seconds string; coerce
+// to YYYY-MM-DD on the way out so clients get consistent ISO dates and the
+// BETWEEN predicate works against the ISO range from defaultRange().
 healthRoutes.get("/weight", async (c) => {
   const { start, end } = defaultRange(c);
+  const dateExpr =
+    "CASE WHEN typeof(calendar_date) IN ('integer','real') OR calendar_date GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]' " +
+    "THEN DATE(calendar_date, 'unixepoch') ELSE calendar_date END";
   const rows = await c.env.DB.prepare(
-    `SELECT calendar_date, weight, bmi, body_fat, body_water, bone_mass, muscle_mass
-    FROM weight WHERE calendar_date BETWEEN ?1 AND ?2 ORDER BY calendar_date`
+    `SELECT ${dateExpr} AS calendar_date, weight, bmi, body_fat, body_water, bone_mass, muscle_mass
+    FROM weight
+    WHERE ${dateExpr} BETWEEN ?1 AND ?2
+    ORDER BY ${dateExpr}`
   )
     .bind(start, end)
     .all();

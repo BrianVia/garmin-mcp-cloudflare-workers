@@ -3,7 +3,14 @@ import type { Env } from "../server";
 
 export const trendRoutes = new Hono<Env>();
 
-const METRICS: Record<string, { table: string; expr: string; notNull: string; dateCol: string }> = {
+// Some tables store calendar_date as a Unix-epoch-seconds string instead of
+// an ISO date (the `weight` table does). This CASE coerces either form to
+// YYYY-MM-DD so strftime/grouping behave the same across metrics.
+const EPOCH_OR_ISO_DATE =
+  "CASE WHEN typeof(calendar_date) IN ('integer','real') OR calendar_date GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]' " +
+  "THEN DATE(calendar_date, 'unixepoch') ELSE calendar_date END";
+
+const METRICS: Record<string, { table: string; expr: string; notNull: string; dateCol: string; dateExpr?: string }> = {
   resting_hr: {
     table: "daily_summary",
     expr: "ROUND(AVG(resting_heart_rate), 1)",
@@ -75,6 +82,7 @@ const METRICS: Record<string, { table: string; expr: string; notNull: string; da
     expr: "ROUND(AVG(weight), 2)",
     notNull: "weight IS NOT NULL",
     dateCol: "calendar_date",
+    dateExpr: EPOCH_OR_ISO_DATE,
   },
   hrv: {
     table: "hrv",
@@ -137,23 +145,23 @@ trendRoutes.get("/:metric", async (c) => {
     return c.json({ error: "period must be 'daily', 'week', or 'month'" }, 400);
   }
 
+  const dateSel = cfg.dateExpr ?? cfg.dateCol;
+
   if (period === "daily") {
-    // Return raw daily values, not aggregated
-    // Extract the base column from the expr (e.g., "ROUND(AVG(resting_heart_rate), 1)" → use direct column)
     const rows = await c.env.DB.prepare(
-      `SELECT ${cfg.dateCol} AS period, ${cfg.expr} AS value, 1 AS data_points
+      `SELECT ${dateSel} AS period, ${cfg.expr} AS value, 1 AS data_points
       FROM ${cfg.table}
       WHERE ${cfg.notNull}
-      GROUP BY ${cfg.dateCol}
-      ORDER BY ${cfg.dateCol}`
+      GROUP BY ${dateSel}
+      ORDER BY ${dateSel}`
     ).all();
     return c.json({ metric, period, data: rows.results });
   }
 
   const groupExpr =
     period === "week"
-      ? `strftime('%Y-W%W', ${cfg.dateCol})`
-      : `strftime('%Y-%m', ${cfg.dateCol})`;
+      ? `strftime('%Y-W%W', ${dateSel})`
+      : `strftime('%Y-%m', ${dateSel})`;
 
   const rows = await c.env.DB.prepare(
     `SELECT ${groupExpr} AS period, ${cfg.expr} AS value, COUNT(*) AS data_points
