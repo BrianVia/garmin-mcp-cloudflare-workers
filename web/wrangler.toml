@@ -2,6 +2,10 @@ name = "garmin-health"
 main = "src/server.ts"
 compatibility_date = "2025-04-01"
 
+routes = [
+  { pattern = "garmin.brianvia.com", custom_domain = true }
+]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "garmin-health"
@@ -11,6 +15,3 @@ database_id = "91ee2ecd-b717-4b14-a817-a39d5c89f9f7"
 directory = "./client/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-
-# [env.production]
-# routes = [{ pattern = "health.flatmeadow.com", custom_domain = true }]
