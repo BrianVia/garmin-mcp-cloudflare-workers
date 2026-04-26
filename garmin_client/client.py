@@ -4,7 +4,9 @@ Garmin Connect Client using Playwright for authentication and data fetching.
 
 import json
 import logging
+import signal
 import sys
+import threading
 import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -179,6 +181,7 @@ class GarminClient:
         self._page: Optional[Page] = None
         self._csrf: Optional[str] = None
         self._display_name: Optional[str] = None
+        self._evaluate_timeout_sec = 90
 
         # Select engine
         if engine == "chrome":
@@ -195,6 +198,110 @@ class GarminClient:
 
         engine_name = "Camoufox" if isinstance(self._engine, _CamoufoxEngine) else "Chrome"
         log.info("Browser engine: %s", engine_name)
+
+    @staticmethod
+    def _is_transient_page_error(exc: Exception) -> bool:
+        msg = str(exc)
+        transient_markers = (
+            "Execution context was destroyed",
+            "Cannot find context with specified id",
+            "Frame was detached",
+            "Target closed",
+            "Browser evaluation timed out",
+        )
+        return any(marker in msg for marker in transient_markers)
+
+    def _evaluate_page(self, expression, arg, description: str):
+        timeout_sec = getattr(self, "_evaluate_timeout_sec", 90)
+        if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "setitimer"):
+            if arg is None:
+                return self._page.evaluate(expression)
+            return self._page.evaluate(expression, arg)
+
+        def _timeout(_signum, _frame):
+            raise TimeoutError(f"Browser evaluation timed out during {description} after {timeout_sec}s")
+
+        previous_handler = signal.getsignal(signal.SIGALRM)
+        signal.signal(signal.SIGALRM, _timeout)
+        signal.setitimer(signal.ITIMER_REAL, timeout_sec)
+        try:
+            if arg is None:
+                return self._page.evaluate(expression)
+            return self._page.evaluate(expression, arg)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0)
+            signal.signal(signal.SIGALRM, previous_handler)
+
+    def _wait_for_page_settle(self, timeout_ms: int = 15000):
+        if not self._page:
+            return
+        try:
+            self._page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
+        except Exception:
+            pass
+
+    def _ensure_modern_page(self, timeout_ms: int = 15000) -> bool:
+        if not self._page:
+            return False
+
+        current = self._page.url
+        needs_navigation = (
+            "connect.garmin.com" not in current
+            or "sso.garmin.com" in current
+            or "/modern/" not in current
+        )
+
+        if needs_navigation:
+            log.debug("Navigating to /modern/ (was on %s)", current)
+            try:
+                self._page.goto(
+                    "https://connect.garmin.com/modern/",
+                    wait_until="domcontentloaded",
+                    timeout=timeout_ms,
+                )
+            except Exception as e:
+                log.debug("Navigation to /modern/ raised: %s", e)
+
+        if needs_navigation:
+            self._wait_for_page_settle(timeout_ms=timeout_ms)
+            time.sleep(1)
+
+        current = self._page.url
+        if "connect.garmin.com" not in current or "sso.garmin.com" in current:
+            log.debug("Expected Garmin app page but landed on %s", current)
+            return False
+        return True
+
+    def _evaluate_with_recovery(
+        self,
+        expression,
+        arg=None,
+        *,
+        description: str,
+        retries: int = 3,
+        ensure_modern: bool = False,
+    ):
+        last_exc = None
+        for attempt in range(1, retries + 1):
+            if ensure_modern and not self._ensure_modern_page():
+                log.debug("%s: app page not ready before attempt %d", description, attempt)
+            try:
+                return self._evaluate_page(expression, arg, description)
+            except Exception as exc:
+                if not self._is_transient_page_error(exc) or attempt == retries:
+                    raise
+                last_exc = exc
+                log.warning(
+                    "%s hit transient page error on attempt %d/%d: %s",
+                    description,
+                    attempt,
+                    retries,
+                    exc,
+                )
+                time.sleep(attempt)
+        if last_exc:
+            raise last_exc
+        raise RuntimeError(f"{description} failed without a captured exception")
 
     def login(self, timeout_ms: int = 600000) -> bool:
         result = self._engine.launch(self.profile_dir, self.headless, self.session_file)
@@ -257,7 +364,11 @@ class GarminClient:
             log.error("Login form not found on page: %s", self._page.url)
             # Dump page content for debugging
             try:
-                body = self._page.evaluate("() => document.body?.innerText?.substring(0, 500)")
+                body = self._evaluate_with_recovery(
+                    "() => document.body?.innerText?.substring(0, 500)",
+                    description="login page body dump",
+                    retries=2,
+                )
                 print(f"Login form not found. Current URL: {self._page.url}")
                 print(f"Page content: {body}")
             except Exception:
@@ -275,12 +386,12 @@ class GarminClient:
 
         # Auto-check "Remember Me" on login page
         try:
-            self._page.evaluate("""
+            self._evaluate_with_recovery("""
                 () => {
                     const cb = document.querySelector('input[name="remember"], input[id="remember"]');
                     if (cb && !cb.checked) cb.click();
                 }
-            """)
+            """, description="login remember-me checkbox")
         except Exception:
             pass
 
@@ -329,7 +440,7 @@ class GarminClient:
             is_mfa_page = "/mfa" in url.lower() or "verifymfa" in url.lower()
             if not is_mfa_page and not mfa_prompted and "sso.garmin.com" in url:
                 try:
-                    has_mfa_input = self._page.evaluate("""
+                    has_mfa_input = self._evaluate_with_recovery("""
                         () => {
                             const inputs = document.querySelectorAll(
                                 'input[name="verificationCode"], input[name="securityCode"], input[type="tel"], '
@@ -338,7 +449,7 @@ class GarminClient:
                             );
                             return inputs.length > 0;
                         }
-                    """)
+                    """, description="mfa page detection")
                     if has_mfa_input:
                         is_mfa_page = True
                         log.info("MFA input found on page (same URL)")
@@ -351,12 +462,12 @@ class GarminClient:
 
                 # Auto-check "Remember this browser" if available
                 try:
-                    self._page.evaluate("""
+                    self._evaluate_with_recovery("""
                         () => {
                             const cb = document.querySelector('input[name="remember"], input[id="remember"], input[type="checkbox"]');
                             if (cb && !cb.checked) cb.click();
                         }
-                    """)
+                    """, description="mfa remember-browser checkbox")
                 except Exception:
                     pass
 
@@ -466,103 +577,163 @@ class GarminClient:
         return "sso.garmin.com" in url or "signin" in url or "sign-in" in url
 
     def _post_login_setup(self) -> bool:
-        # Make sure we're on the /modern/ page which has the CSRF meta tag
-        current = self._page.url
-        if "/modern/" not in current:
-            log.debug("Navigating to /modern/ for CSRF (was on %s)", current)
-            try:
-                self._page.goto(
-                    "https://connect.garmin.com/modern/",
-                    wait_until="domcontentloaded",
-                )
-            except Exception:
-                pass
-            time.sleep(3)
+        for attempt in range(1, 4):
+            if not self._ensure_modern_page():
+                log.debug("Could not reach Garmin app page during post-login setup (attempt %d)", attempt)
+                time.sleep(attempt)
+                continue
 
-        setup = self._page.evaluate("""
-            async () => {
-                const csrf = document.querySelector(
-                    'meta[name="csrf-token"], meta[name="_csrf"]'
-                )?.content;
-                const h = {'connect-csrf-token': csrf};
-                const resp = await fetch(
-                    '/gc-api/userprofile-service/socialProfile',
-                    {credentials: 'include', headers: h}
-                );
-                const profile = resp.status === 200 ? await resp.json() : null;
-                return {csrf, displayName: profile?.displayName};
-            }
-        """)
-        self._csrf = setup.get("csrf")
-        self._display_name = setup.get("displayName")
-        if not self._csrf:
-            log.debug("Could not extract CSRF token")
-            return False
-        log.info("Display name: %s", self._display_name)
-        return True
+            try:
+                setup = self._evaluate_with_recovery(
+                    """
+                    async () => {
+                        const csrf = document.querySelector(
+                            'meta[name="csrf-token"], meta[name="_csrf"]'
+                        )?.content;
+                        const h = {'connect-csrf-token': csrf};
+                        const resp = await fetch(
+                            '/gc-api/userprofile-service/socialProfile',
+                            {credentials: 'include', headers: h}
+                        );
+                        const profile = resp.status === 200 ? await resp.json() : null;
+                        return {csrf, profileStatus: resp.status, displayName: profile?.displayName};
+                    }
+                    """,
+                    description="post-login setup",
+                    retries=3,
+                    ensure_modern=True,
+                )
+            except Exception as exc:
+                if not self._is_transient_page_error(exc):
+                    raise
+                log.warning("Post-login setup failed after retries (attempt %d): %s", attempt, exc)
+                time.sleep(attempt)
+                continue
+
+            self._csrf = setup.get("csrf")
+            self._display_name = setup.get("displayName")
+            if self._csrf and setup.get("profileStatus") == 200:
+                log.info("Display name: %s", self._display_name)
+                return True
+
+            self._csrf = None
+            self._display_name = None
+            log.debug(
+                "Could not validate Garmin session on attempt %d (csrf=%s, profile_status=%s)",
+                attempt,
+                bool(setup.get("csrf")),
+                setup.get("profileStatus"),
+            )
+            time.sleep(attempt)
+
+        return False
 
     def _fetch_batch(self, rest: dict, gql: dict) -> dict:
         """Fetch a batch of REST + GraphQL endpoints in parallel via browser."""
-        # Ensure we're on the right page (navigation can destroy context)
-        current = self._page.url
-        if "connect.garmin.com" not in current or "sso.garmin.com" in current:
-            try:
-                self._page.goto(
-                    "https://connect.garmin.com/modern/",
-                    wait_until="domcontentloaded",
-                )
-                time.sleep(2)
-            except Exception:
-                pass
-
         rest_entries = list(rest.items())
         gql_entries = list(gql.items())
+        log.debug("Fetch batch starting: %d REST, %d GraphQL", len(rest_entries), len(gql_entries))
+        for attempt in range(1, 4):
+            log.debug("Fetch batch attempt %d/3: ensuring Garmin app page", attempt)
+            if not self._ensure_modern_page():
+                self._csrf = None
+                if attempt == 3:
+                    raise RuntimeError("Garmin app page unavailable before fetch batch after 3 attempts")
+                log.warning("Garmin app page unavailable before fetch batch (attempt %d/3); retrying", attempt)
+                time.sleep(attempt)
+                continue
 
-        return self._page.evaluate(
-            """
-            async ([csrf, restEntries, gqlEntries]) => {
-                const h = {'connect-csrf-token': csrf, 'Accept': 'application/json'};
+            log.debug("Fetch batch attempt %d/3: validating Garmin session", attempt)
+            if not self._csrf and not self._post_login_setup():
+                if attempt == 3:
+                    raise RuntimeError("Failed to refresh Garmin session before fetch batch after 3 attempts")
+                log.warning("Failed to refresh Garmin session before fetch batch (attempt %d/3); retrying", attempt)
+                time.sleep(attempt)
+                continue
 
-                async function get(url) {
-                    try {
-                        const resp = await fetch(url, {credentials:'include', headers: h});
-                        if (resp.status === 200) {
-                            const text = await resp.text();
-                            try { return {status: 200, data: JSON.parse(text)}; }
-                            catch { return {status: 200, data: text}; }
+            try:
+                result = self._evaluate_with_recovery(
+                    """
+                    async ([csrf, restEntries, gqlEntries]) => {
+                        const h = {'connect-csrf-token': csrf, 'Accept': 'application/json'};
+                        const FETCH_TIMEOUT_MS = 60000;
+
+                        async function withTimeout(operation) {
+                            const controller = new AbortController();
+                            let timer;
+                            try {
+                                return await Promise.race([
+                                    operation(controller.signal),
+                                    new Promise((_, reject) => {
+                                        timer = setTimeout(() => {
+                                            controller.abort();
+                                            reject(new Error('fetch timeout'));
+                                        }, FETCH_TIMEOUT_MS);
+                                    }),
+                                ]);
+                            } finally {
+                                clearTimeout(timer);
+                            }
                         }
-                        return {status: resp.status, data: null};
-                    } catch(e) { return {status: 'error', data: e.message}; }
-                }
 
-                async function gql(query) {
-                    try {
-                        const resp = await fetch('/gc-api/graphql-gateway/graphql', {
-                            method: 'POST',
-                            credentials: 'include',
-                            headers: {...h, 'Content-Type': 'application/json'},
-                            body: JSON.stringify({query})
-                        });
-                        if (resp.status === 200) return {status: 200, data: await resp.json()};
-                        return {status: resp.status, data: null};
-                    } catch(e) { return {status: 'error', data: e.message}; }
-                }
+                        async function get(url) {
+                            try {
+                                return await withTimeout(async (signal) => {
+                                    const resp = await fetch(url, {credentials:'include', headers: h, signal});
+                                    if (resp.status === 200) {
+                                        const text = await resp.text();
+                                        try { return {status: 200, data: JSON.parse(text)}; }
+                                        catch { return {status: 200, data: text}; }
+                                    }
+                                    return {status: resp.status, data: null};
+                                });
+                            } catch(e) { return {status: 'error', data: e.message || 'fetch timeout'}; }
+                        }
 
-                const promises = [
-                    ...restEntries.map(([name, url]) => get(url).then(r => [name, r])),
-                    ...gqlEntries.map(([name, query]) => gql(query).then(r => ['gql_' + name, r])),
-                ];
+                        async function gql(query) {
+                            try {
+                                return await withTimeout(async (signal) => {
+                                    const resp = await fetch('/gc-api/graphql-gateway/graphql', {
+                                        method: 'POST',
+                                        credentials: 'include',
+                                        headers: {...h, 'Content-Type': 'application/json'},
+                                        body: JSON.stringify({query}),
+                                        signal
+                                    });
+                                    if (resp.status === 200) return {status: 200, data: await resp.json()};
+                                    return {status: resp.status, data: null};
+                                });
+                            } catch(e) { return {status: 'error', data: e.message || 'fetch timeout'}; }
+                        }
 
-                const results = await Promise.all(promises);
-                const output = {};
-                for (const [name, result] of results) {
-                    output[name] = result;
-                }
-                return output;
-            }
-        """,
-            [self._csrf, rest_entries, gql_entries],
-        )
+                        const promises = [
+                            ...restEntries.map(([name, url]) => get(url).then(r => [name, r])),
+                            ...gqlEntries.map(([name, query]) => gql(query).then(r => ['gql_' + name, r])),
+                        ];
+
+                        const results = await Promise.all(promises);
+                        const output = {};
+                        for (const [name, result] of results) {
+                            output[name] = result;
+                        }
+                        return output;
+                    }
+                """,
+                    [self._csrf, rest_entries, gql_entries],
+                    description="fetch batch",
+                    retries=3,
+                    ensure_modern=True,
+                )
+                log.debug("Fetch batch complete: %d results", len(result))
+                return result
+            except Exception as exc:
+                if not self._is_transient_page_error(exc) or attempt == 3:
+                    raise
+                self._csrf = None
+                log.warning("Retrying fetch batch after transient page error (attempt %d): %s", attempt, exc)
+                time.sleep(attempt)
+
+        raise RuntimeError("Fetch batch exhausted retries")
 
     def _date_chunks(self, start: str, end: str, max_days: int = 28) -> list:
         """Split a date range into chunks of max_days."""

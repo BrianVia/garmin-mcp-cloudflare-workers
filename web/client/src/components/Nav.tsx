@@ -12,7 +12,6 @@ const links = [
 
 export function Nav() {
   const { path } = useLocation();
-  const year = new Date().getFullYear();
 
   return (
     <header class="masthead">
@@ -21,7 +20,7 @@ export function Nav() {
           give<span class="amp">my</span>data
         </span>
         <span class="brand-tag">
-          PERSONAL HEALTH ALMANAC<span class="dot">●</span>VOL. {year}
+          vital signals<span class="dot">·</span>daily
         </span>
       </a>
       <nav class="links">

@@ -10,6 +10,8 @@ PROJECT_DIR="/home/via/Development/Personal/garmin-givemydata"
 LOG_FILE="/tmp/garmin-sync.log"
 ENV_FILE="$PROJECT_DIR/.env"
 SYNC_TARGET_DATE="${1:-${SYNC_TARGET_DATE:-}}"
+LOCK_FILE="/tmp/garmin-sync.lock"
+GARMIN_SYNC_TIMEOUT_SEC="${GARMIN_SYNC_TIMEOUT_SEC:-1800}"
 
 SLACKPIPES_WEBHOOK="REDACTED_SLACKPIPES_WEBHOOK"
 ALERT_RATE_LIMIT_DIR="/tmp/garmin-sync-alerts"
@@ -90,6 +92,12 @@ fail() {
 cd "$PROJECT_DIR"
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  log "Another Garmin sync is already running; skipping this cycle"
+  exit 0
+fi
+
 if [[ -f "$ENV_FILE" ]]; then
   log "Loading env vars from $ENV_FILE"
   set -a
@@ -115,11 +123,11 @@ fi
 
 # 1) Garmin sync (local DB)
 if [[ -n "$SYNC_TARGET_DATE" ]]; then
-  if ! run_step "garmin_mcp.sync($SYNC_TARGET_DATE)" .venv/bin/python -m garmin_mcp.sync "$SYNC_TARGET_DATE"; then
+  if ! run_step "garmin_mcp.sync($SYNC_TARGET_DATE)" timeout "$GARMIN_SYNC_TIMEOUT_SEC" .venv/bin/python -m garmin_mcp.sync "$SYNC_TARGET_DATE"; then
     fail "garmin_sync" "local Garmin sync failed for target date $SYNC_TARGET_DATE"
   fi
 else
-  if ! run_step "garmin_mcp.sync" .venv/bin/python -m garmin_mcp.sync; then
+  if ! run_step "garmin_mcp.sync" timeout "$GARMIN_SYNC_TIMEOUT_SEC" .venv/bin/python -m garmin_mcp.sync; then
     fail "garmin_sync" "local Garmin sync failed"
   fi
 fi

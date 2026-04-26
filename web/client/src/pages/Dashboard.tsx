@@ -105,19 +105,53 @@ function ProgressArc({ value, goal, color }: { value: number; goal: number; colo
   const offset = circ - (pct / 100) * circ;
   return (
     <svg width="56" height="56" style="margin-top:0.5rem" viewBox="0 0 56 56">
-      <circle cx="28" cy="28" r={r} fill="none" stroke="var(--rule-2)" stroke-width="2" />
+      <circle cx="28" cy="28" r={r} fill="none" stroke="var(--rule-2)" stroke-width="3" />
       <circle
-        cx="28" cy="28" r={r} fill="none" stroke={color} stroke-width="2"
+        cx="28" cy="28" r={r} fill="none" stroke={color} stroke-width="3"
         stroke-dasharray={circ} stroke-dashoffset={offset}
         stroke-linecap="round" transform="rotate(-90 28 28)"
         style="transition:stroke-dashoffset 0.8s cubic-bezier(0.2,0.7,0.2,1)"
       />
       <text x="28" y="28" text-anchor="middle" dominant-baseline="central"
-        fill={color} font-size="11" font-family="var(--font-mono)" font-weight="500"
-        letter-spacing="0.02em">
+        fill="var(--fg-1)" font-size="12" font-family="var(--font-sans)" font-weight="700"
+        letter-spacing="-0.02em">
         {Math.round(pct)}%
       </text>
     </svg>
+  );
+}
+
+function ReadinessRing({ score, color }: { score: number | null; color: string }) {
+  const r = 112;
+  const circ = 2 * Math.PI * r;
+  const pct = score != null ? Math.min(Math.max(score, 0), 100) / 100 : 0;
+  const offset = circ - pct * circ;
+  const gradId = "readiness-ring-grad";
+  return (
+    <div class="readiness-ring">
+      <svg viewBox="0 0 260 260">
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color={color} stop-opacity="0.85" />
+            <stop offset="100%" stop-color={color} stop-opacity="1" />
+          </linearGradient>
+        </defs>
+        <circle class="ring-track" cx="130" cy="130" r={r} fill="none" stroke-width="8" />
+        <circle
+          class="ring-fill"
+          cx="130" cy="130" r={r} fill="none"
+          stroke={`url(#${gradId})`} stroke-width="8"
+          stroke-dasharray={circ}
+          stroke-dashoffset={offset}
+          style={`color:${color}`}
+        />
+      </svg>
+      <div class="ring-inner">
+        <div class="ring-label">Readiness</div>
+        <div class="ring-num">{score ?? "—"}</div>
+        <div class="ring-sub">out of 100</div>
+      </div>
+    </div>
   );
 }
 
@@ -136,24 +170,28 @@ function hrvStatusBadge(status?: string) {
 }
 
 function scoreTone(score: number | undefined): string {
-  if (score == null) return "";
+  if (score == null) return "teal";
   if (score >= 75) return "teal";
-  if (score >= 50) return "ochre";
-  if (score >= 25) return "rust";
-  return "crimson";
+  if (score >= 50) return "mint";
+  if (score >= 25) return "amber";
+  return "coral";
+}
+
+function toneColor(tone: string): string {
+  return `var(--${tone})`;
 }
 
 function readinessPhrase(level?: string): { text: string; em: string } {
-  if (!level) return { text: "Signal holds steady,", em: "day unfolding." };
+  if (!level) return { text: "Signals steady —", em: "day unfolding." };
   const map: Record<string, { text: string; em: string }> = {
     PRIME: { text: "Every system green —", em: "chase something hard." },
-    PRODUCTIVE: { text: "Well-rested and sharp,", em: "do the work." },
-    MAINTAINING: { text: "Body holding the line —", em: "stay the course." },
+    PRODUCTIVE: { text: "Well-rested and sharp —", em: "do the work." },
+    MAINTAINING: { text: "Holding the line —", em: "stay the course." },
     RECOVERY: { text: "Recovery in progress —", em: "move gently." },
-    LOW: { text: "Reserves are thin,", em: "today is an easy day." },
+    LOW: { text: "Reserves are thin —", em: "take it easy." },
     POOR: { text: "Strain accumulated —", em: "rest is the training." },
   };
-  return map[level] ?? { text: "Reading the tea leaves,", em: "see signals below." };
+  return map[level] ?? { text: "Reading the signals —", em: "see below." };
 }
 
 export function Dashboard() {
@@ -184,46 +222,41 @@ export function Dashboard() {
       })
     : "";
 
+  const ringColor = toneColor(tone);
+
   return (
     <div>
       <div class="page-header">
-        <div class="eyebrow">Daily Digest</div>
+        <div class="eyebrow">Today</div>
         <h1>
-          Today's <em>reading</em>
+          Your <em>daily</em> signals
         </h1>
         <div class="dateline">
           <span>{dateStr}</span>
           {latestTraining?.feedback_short && (
             <>
-              <span class="sep">/</span>
+              <span class="sep">·</span>
               <span class="accent">
                 {latestTraining.feedback_short.replace(/_/g, " ").toLowerCase()}
               </span>
             </>
           )}
-          <span class="sep">/</span>
+          <span class="sep">·</span>
           <span>{dash.daily.length}-day window</span>
         </div>
       </div>
 
-      {/* HERO — Training Readiness as editorial focal point */}
+      {/* HERO — Oura-style readiness ring with stat tiles */}
       <section class="hero">
         <div class="hero-main">
-          <div class="hero-label">Training Readiness</div>
-          <div class="hero-figure">
-            <span style={tone ? `color:var(--${tone === "teal" ? "teal" : tone === "ochre" ? "ochre" : tone === "rust" ? "rust" : "crimson"})` : undefined}>
-              {readinessScore ?? "—"}
-            </span>
-            <span class="slash">/</span>
-            <span class="denom">100</span>
-          </div>
+          <ReadinessRing score={readinessScore} color={ringColor} />
           <div class="hero-pullquote">
             {phrase.text} <em>{phrase.em}</em>
           </div>
-          <div style="display:flex;gap:0.5rem;margin-top:1.25rem;align-items:center;flex-wrap:wrap">
+          <div style="display:flex;gap:0.5rem;margin-top:0.75rem;align-items:center;flex-wrap:wrap;justify-content:center">
             {levelBadge(latestTraining?.level)}
             {latestTraining?.recovery_time != null && (
-              <span style="font-family:var(--font-mono);font-size:0.75rem;color:var(--ash);letter-spacing:0.1em;text-transform:uppercase">
+              <span style="font-size:0.75rem;color:var(--fg-3);font-weight:500">
                 Recovery · {Math.round(latestTraining.recovery_time)}h
               </span>
             )}
@@ -234,12 +267,13 @@ export function Dashboard() {
           <div class="hero-kpi">
             <div class={`kpi-num ${latestHrv?.status === "BALANCED" ? "teal" : latestHrv?.status === "LOW" ? "crimson" : "ochre"}`}>
               {latestHrv?.last_night ?? latestHrv?.weekly_avg ?? "—"}
+              <span style="font-size:0.55em;color:var(--fg-3);margin-left:0.25em;font-weight:500">ms</span>
             </div>
             <div class="kpi-meta">
               <div class="kpi-label">HRV — overnight</div>
               <div class="kpi-sub">
                 {latestHrv
-                  ? `baseline ${Math.round(latestHrv.baseline_low || 0)}–${Math.round(latestHrv.baseline_upper || 0)} ms · ${latestHrv.status?.toLowerCase()}`
+                  ? `baseline ${Math.round(latestHrv.baseline_low || 0)}–${Math.round(latestHrv.baseline_upper || 0)} · ${latestHrv.status?.toLowerCase()}`
                   : "—"}
               </div>
             </div>
@@ -248,7 +282,7 @@ export function Dashboard() {
           <div class="hero-kpi">
             <div class="kpi-num indigo">
               {latestSleep?.sleep_hours != null ? round(latestSleep.sleep_hours) : "—"}
-              {latestSleep?.sleep_hours != null && <span style="font-size:0.5em;color:var(--ash);margin-left:0.125em">h</span>}
+              {latestSleep?.sleep_hours != null && <span style="font-size:0.55em;color:var(--fg-3);margin-left:0.25em;font-weight:500">hrs</span>}
             </div>
             <div class="kpi-meta">
               <div class="kpi-label">Sleep — last night</div>
@@ -263,11 +297,12 @@ export function Dashboard() {
           <div class="hero-kpi">
             <div class="kpi-num crimson">
               {latest?.resting_heart_rate ?? "—"}
+              <span style="font-size:0.55em;color:var(--fg-3);margin-left:0.25em;font-weight:500">bpm</span>
             </div>
             <div class="kpi-meta">
               <div class="kpi-label">Resting HR</div>
               <div class="kpi-sub">
-                bpm · {dash.daily.filter((d) => d.resting_heart_rate).length}-day data
+                {dash.daily.filter((d) => d.resting_heart_rate).length}-day data
               </div>
             </div>
           </div>
