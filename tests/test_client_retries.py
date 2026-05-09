@@ -42,6 +42,8 @@ def make_client(page):
     client._display_name = None
     client._engine = None
     client.session_file = None
+    client._fetch_timeout_ms = 30000
+    client._fetch_batch_retries = 3
     return client
 
 
@@ -61,7 +63,8 @@ class GarminClientRetryTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(client._csrf, "token-123")
         self.assertEqual(client._display_name, "Via")
-        self.assertEqual(len(page.goto_calls), 0)
+        self.assertEqual(page.goto_calls[0][0], "about:blank")
+        self.assertEqual(page.goto_calls[1][0], "https://connect.garmin.com/modern/")
 
     @patch("garmin_client.client.time.sleep", return_value=None)
     def test_fetch_batch_refreshes_setup_after_context_loss(self, _sleep):
@@ -96,6 +99,23 @@ class GarminClientRetryTests(unittest.TestCase):
 
         self.assertEqual(result["summary"]["status"], 200)
         self.assertEqual(len(page.goto_calls), 2)
+
+    @patch("garmin_client.client.time.sleep", return_value=None)
+    def test_fetch_batch_uses_single_evaluate_attempt_per_outer_retry(self, _sleep):
+        page = FakePage(
+            [
+                Exception("Browser evaluation timed out during fetch batch after 45s"),
+                {"csrf": "fresh-token", "profileStatus": 200, "displayName": "Via"},
+                {"summary": {"status": 200, "data": {"steps": 1234}}},
+            ]
+        )
+        client = make_client(page)
+
+        result = client._fetch_batch({"summary": "/gc-api/example"}, {})
+
+        self.assertEqual(result["summary"]["status"], 200)
+        self.assertEqual(page.goto_calls[0][0], "about:blank")
+        self.assertEqual(page.goto_calls[1][0], "https://connect.garmin.com/modern/")
 
     @patch("garmin_client.client.time.sleep", return_value=None)
     def test_post_login_setup_rejects_csrf_without_valid_profile_session(self, _sleep):

@@ -4,6 +4,7 @@ Garmin Connect Client using Playwright for authentication and data fetching.
 
 import json
 import logging
+import os
 import signal
 import sys
 import threading
@@ -29,6 +30,9 @@ from .endpoints import (
 log = logging.getLogger(__name__)
 
 DEFAULT_PROFILE_DIR = Path.home() / ".garmin-client" / "browser_profile"
+DEFAULT_EVALUATE_TIMEOUT_SEC = 45
+DEFAULT_FETCH_TIMEOUT_MS = 30000
+DEFAULT_FETCH_BATCH_RETRIES = 3
 
 SSO_LOGIN_URL = (
     "https://sso.garmin.com/portal/sso/en-US/sign-in"
@@ -181,7 +185,9 @@ class GarminClient:
         self._page: Optional[Page] = None
         self._csrf: Optional[str] = None
         self._display_name: Optional[str] = None
-        self._evaluate_timeout_sec = 90
+        self._evaluate_timeout_sec = _env_int("GARMIN_EVALUATE_TIMEOUT_SEC", DEFAULT_EVALUATE_TIMEOUT_SEC)
+        self._fetch_timeout_ms = _env_int("GARMIN_FETCH_TIMEOUT_MS", DEFAULT_FETCH_TIMEOUT_MS)
+        self._fetch_batch_retries = _env_int("GARMIN_FETCH_BATCH_RETRIES", DEFAULT_FETCH_BATCH_RETRIES)
 
         # Select engine
         if engine == "chrome":
@@ -272,6 +278,17 @@ class GarminClient:
             return False
         return True
 
+    def _recover_page_after_transient(self, description: str):
+        if not self._page:
+            return
+        try:
+            log.debug("%s: resetting Garmin app page after transient browser error", description)
+            self._page.goto("about:blank", wait_until="domcontentloaded", timeout=5000)
+            self._page.goto("https://connect.garmin.com/modern/", wait_until="domcontentloaded", timeout=15000)
+            self._wait_for_page_settle(timeout_ms=15000)
+        except Exception as exc:
+            log.debug("%s: page reset failed: %s", description, exc)
+
     def _evaluate_with_recovery(
         self,
         expression,
@@ -298,6 +315,7 @@ class GarminClient:
                     retries,
                     exc,
                 )
+                self._recover_page_after_transient(description)
                 time.sleep(attempt)
         if last_exc:
             raise last_exc
@@ -632,31 +650,45 @@ class GarminClient:
         """Fetch a batch of REST + GraphQL endpoints in parallel via browser."""
         rest_entries = list(rest.items())
         gql_entries = list(gql.items())
-        log.debug("Fetch batch starting: %d REST, %d GraphQL", len(rest_entries), len(gql_entries))
-        for attempt in range(1, 4):
-            log.debug("Fetch batch attempt %d/3: ensuring Garmin app page", attempt)
+        batch_names = [name for name, _ in rest_entries] + [f"gql_{name}" for name, _ in gql_entries]
+        batch_label = ", ".join(batch_names[:5])
+        if len(batch_names) > 5:
+            batch_label += f", +{len(batch_names) - 5} more"
+        log.info("Fetch batch starting: %d REST, %d GraphQL (%s)", len(rest_entries), len(gql_entries), batch_label)
+        started_at = time.monotonic()
+        retries = max(1, getattr(self, "_fetch_batch_retries", DEFAULT_FETCH_BATCH_RETRIES))
+        for attempt in range(1, retries + 1):
+            log.debug("Fetch batch attempt %d/%d: ensuring Garmin app page", attempt, retries)
             if not self._ensure_modern_page():
                 self._csrf = None
-                if attempt == 3:
-                    raise RuntimeError("Garmin app page unavailable before fetch batch after 3 attempts")
-                log.warning("Garmin app page unavailable before fetch batch (attempt %d/3); retrying", attempt)
+                if attempt == retries:
+                    raise RuntimeError(f"Garmin app page unavailable before fetch batch after {retries} attempts")
+                log.warning(
+                    "Garmin app page unavailable before fetch batch (attempt %d/%d); retrying",
+                    attempt,
+                    retries,
+                )
                 time.sleep(attempt)
                 continue
 
-            log.debug("Fetch batch attempt %d/3: validating Garmin session", attempt)
+            log.debug("Fetch batch attempt %d/%d: validating Garmin session", attempt, retries)
             if not self._csrf and not self._post_login_setup():
-                if attempt == 3:
-                    raise RuntimeError("Failed to refresh Garmin session before fetch batch after 3 attempts")
-                log.warning("Failed to refresh Garmin session before fetch batch (attempt %d/3); retrying", attempt)
+                if attempt == retries:
+                    raise RuntimeError(f"Failed to refresh Garmin session before fetch batch after {retries} attempts")
+                log.warning(
+                    "Failed to refresh Garmin session before fetch batch (attempt %d/%d); retrying",
+                    attempt,
+                    retries,
+                )
                 time.sleep(attempt)
                 continue
 
             try:
                 result = self._evaluate_with_recovery(
                     """
-                    async ([csrf, restEntries, gqlEntries]) => {
+                    async ([csrf, restEntries, gqlEntries, fetchTimeoutMs]) => {
                         const h = {'connect-csrf-token': csrf, 'Accept': 'application/json'};
-                        const FETCH_TIMEOUT_MS = 60000;
+                        const FETCH_TIMEOUT_MS = fetchTimeoutMs;
 
                         async function withTimeout(operation) {
                             const controller = new AbortController();
@@ -719,18 +751,34 @@ class GarminClient:
                         return output;
                     }
                 """,
-                    [self._csrf, rest_entries, gql_entries],
+                    [self._csrf, rest_entries, gql_entries, getattr(self, "_fetch_timeout_ms", DEFAULT_FETCH_TIMEOUT_MS)],
                     description="fetch batch",
-                    retries=3,
+                    retries=1,
                     ensure_modern=True,
                 )
-                log.debug("Fetch batch complete: %d results", len(result))
+                elapsed = time.monotonic() - started_at
+                error_count = sum(1 for item in result.values() if item.get("status") == "error")
+                if error_count:
+                    log.warning(
+                        "Fetch batch complete in %.1fs with %d/%d endpoint errors",
+                        elapsed,
+                        error_count,
+                        len(result),
+                    )
+                else:
+                    log.info("Fetch batch complete in %.1fs: %d results", elapsed, len(result))
                 return result
             except Exception as exc:
-                if not self._is_transient_page_error(exc) or attempt == 3:
+                if not self._is_transient_page_error(exc) or attempt == retries:
                     raise
                 self._csrf = None
-                log.warning("Retrying fetch batch after transient page error (attempt %d): %s", attempt, exc)
+                log.warning(
+                    "Retrying fetch batch after transient page error (attempt %d/%d): %s",
+                    attempt,
+                    retries,
+                    exc,
+                )
+                self._recover_page_after_transient("fetch batch")
                 time.sleep(attempt)
 
         raise RuntimeError("Fetch batch exhausted retries")
@@ -1029,3 +1077,15 @@ def _remove_nulls(obj):
     if isinstance(obj, list):
         return [_remove_nulls(item) for item in obj]
     return obj
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        log.warning("Ignoring invalid %s=%r; using %d", name, raw, default)
+        return default
+    return value if value > 0 else default
