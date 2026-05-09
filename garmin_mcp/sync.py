@@ -14,6 +14,22 @@ from garmin_mcp.db import get_connection, init_db, save_to_db
 logger = logging.getLogger(__name__)
 
 
+def _known_activity_detail_ids(conn) -> set[int]:
+    """Return activity IDs that already have per-activity detail rows."""
+    rows = conn.execute(
+        """
+        SELECT activity_id FROM activity_splits
+        UNION
+        SELECT activity_id FROM activity_hr_zones
+        UNION
+        SELECT activity_id FROM activity_weather
+        UNION
+        SELECT activity_id FROM activity_exercise_sets
+        """
+    ).fetchall()
+    return {int(row["activity_id"]) for row in rows if row["activity_id"] is not None}
+
+
 def incremental_sync(target_date: str = None) -> dict:
     """Fetch today's data from Garmin and save directly to the database.
 
@@ -59,6 +75,8 @@ def incremental_sync(target_date: str = None) -> dict:
     # Open DB connection for direct writes
     conn = get_connection()
     init_db(conn)
+    known_activity_ids = _known_activity_detail_ids(conn)
+    logger.info("Found %d activities with existing detail data", len(known_activity_ids))
 
     counts = {}
 
@@ -88,6 +106,7 @@ def incremental_sync(target_date: str = None) -> dict:
             start_date=yesterday,
             end_date=today,
             on_batch=on_batch,
+            known_activity_ids=known_activity_ids,
         )
     finally:
         client.close()
