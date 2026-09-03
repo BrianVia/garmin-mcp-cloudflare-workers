@@ -10,8 +10,20 @@ data type, a save_to_db() router, and a generic query helper.
 import json
 import logging
 import sqlite3
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
+
+LOCAL_TZ = ZoneInfo("America/New_York")
+
+
+def now_local() -> datetime:
+    return datetime.now(LOCAL_TZ)
+
+
+def today() -> date:
+    return now_local().date()
 
 
 def _default_db_path() -> str:
@@ -124,6 +136,7 @@ CREATE TABLE IF NOT EXISTS sleep (
     avg_sleep_stress            REAL,
     sleep_score_feedback        TEXT,
     sleep_score_insight         TEXT,
+    scored_at                   TEXT,
     raw_json                    TEXT
 );
 
@@ -598,9 +611,15 @@ CREATE INDEX IF NOT EXISTS idx_act_weather ON activity_weather (activity_id);
 """
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    if column not in {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def init_db(conn: sqlite3.Connection) -> None:
     """Create all tables and indexes if they do not already exist."""
     conn.executescript(_SCHEMA_SQL)
+    _ensure_column(conn, "sleep", "scored_at", "TEXT")
     conn.commit()
 
 
@@ -695,28 +714,57 @@ def upsert_daily_summary(conn: sqlite3.Connection, record: dict) -> None:
 
 
 def upsert_sleep(conn: sqlite3.Connection, record: dict) -> None:
+    """Store sleep by wake date.
+
+    calendar_date is the WAKE date. sleep_time_seconds NULL = Garmin has not
+    scored the night yet (sleep_pending), not 'watch off'. nap_time_seconds is
+    separate; never add it to last night.
+    """
     dto: dict[str, Any] = record.get("dailySleepDTO") or record
     sleep_seconds = dto.get("sleepTimeSeconds")
-    if sleep_seconds is None:
-        return
     calendar_date = dto.get("calendarDate") or record.get("date")
+    if not calendar_date:
+        return
     conn.execute(
         """
-        INSERT OR REPLACE INTO sleep (
+        INSERT INTO sleep (
             calendar_date, sleep_time_seconds, nap_time_seconds,
             deep_sleep_seconds, light_sleep_seconds, rem_sleep_seconds,
             awake_sleep_seconds, unmeasurable_sleep_seconds, awake_count,
             average_spo2, lowest_spo2, average_hr_sleep, average_respiration,
             lowest_respiration, highest_respiration, avg_sleep_stress,
-            sleep_score_feedback, sleep_score_insight, raw_json
+            sleep_score_feedback, sleep_score_insight, scored_at, raw_json
         ) VALUES (
             :calendar_date, :sleep_time_seconds, :nap_time_seconds,
             :deep_sleep_seconds, :light_sleep_seconds, :rem_sleep_seconds,
             :awake_sleep_seconds, :unmeasurable_sleep_seconds, :awake_count,
             :average_spo2, :lowest_spo2, :average_hr_sleep, :average_respiration,
             :lowest_respiration, :highest_respiration, :avg_sleep_stress,
-            :sleep_score_feedback, :sleep_score_insight, :raw_json
+            :sleep_score_feedback, :sleep_score_insight, :scored_at, :raw_json
         )
+        ON CONFLICT(calendar_date) DO UPDATE SET
+            calendar_date = excluded.calendar_date,
+            sleep_time_seconds = excluded.sleep_time_seconds,
+            nap_time_seconds = excluded.nap_time_seconds,
+            deep_sleep_seconds = excluded.deep_sleep_seconds,
+            light_sleep_seconds = excluded.light_sleep_seconds,
+            rem_sleep_seconds = excluded.rem_sleep_seconds,
+            awake_sleep_seconds = excluded.awake_sleep_seconds,
+            unmeasurable_sleep_seconds = excluded.unmeasurable_sleep_seconds,
+            awake_count = excluded.awake_count,
+            average_spo2 = excluded.average_spo2,
+            lowest_spo2 = excluded.lowest_spo2,
+            average_hr_sleep = excluded.average_hr_sleep,
+            average_respiration = excluded.average_respiration,
+            lowest_respiration = excluded.lowest_respiration,
+            highest_respiration = excluded.highest_respiration,
+            avg_sleep_stress = excluded.avg_sleep_stress,
+            sleep_score_feedback = excluded.sleep_score_feedback,
+            sleep_score_insight = excluded.sleep_score_insight,
+            scored_at = COALESCE(sleep.scored_at, excluded.scored_at),
+            raw_json = excluded.raw_json
+        WHERE excluded.sleep_time_seconds IS NOT NULL
+           OR sleep.sleep_time_seconds IS NULL
         """,
         {
             "calendar_date": calendar_date,
@@ -737,6 +785,7 @@ def upsert_sleep(conn: sqlite3.Connection, record: dict) -> None:
             "avg_sleep_stress": dto.get("avgSleepStress"),
             "sleep_score_feedback": dto.get("sleepScoreFeedback"),
             "sleep_score_insight": dto.get("sleepScoreInsight"),
+            "scored_at": now_local().isoformat(timespec="seconds") if sleep_seconds is not None else None,
             "raw_json": json.dumps(record),
         },
     )
@@ -1458,16 +1507,33 @@ def upsert_device(conn, record):
     device_id = record.get("deviceId") or record.get("unitId")
     if device_id is None:
         return
+    last_sync = next(
+        (
+            record.get(key)
+            for key in ("lastSyncTimestampGMT", "lastSyncTime", "lastSync", "lastUsedDeviceUploadTime")
+            if record.get(key) is not None
+        ),
+        None,
+    )
+    if isinstance(last_sync, int):
+        last_sync = datetime.fromtimestamp(last_sync / 1000, timezone.utc).isoformat()
     conn.execute(
-        """INSERT OR REPLACE INTO device
+        """INSERT INTO device
            (device_id, display_name, device_type, application_key, last_sync, raw_json)
-           VALUES (?, ?, ?, ?, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(device_id) DO UPDATE SET
+             display_name = COALESCE(excluded.display_name, device.display_name),
+             device_type = COALESCE(excluded.device_type, device.device_type),
+             application_key = COALESCE(excluded.application_key, device.application_key),
+             last_sync = COALESCE(excluded.last_sync, device.last_sync),
+             raw_json = CASE WHEN length(excluded.raw_json) > length(device.raw_json)
+               THEN excluded.raw_json ELSE device.raw_json END""",
         (
             device_id,
             record.get("displayName"),
             record.get("deviceTypeSimpleName"),
             record.get("applicationKey"),
-            record.get("lastSync"),
+            last_sync,
             json.dumps(record),
         ),
     )
@@ -1822,11 +1888,14 @@ def save_to_db(conn: sqlite3.Connection, endpoint_name: str, data, cal_date: str
                 upsert_daily_summary(conn, rec)
                 count += 1
 
+        elif name == "sync_timestamp":
+            upsert_user_profile(conn, name, data)
+            count += 1
+
         elif name in (
             "daily_summaries_avg",
             "stats_averages",
             "daily_summaries_count",
-            "sync_timestamp",
             "personal_record_types",
         ):
             # Metadata/averages — skip
@@ -1901,6 +1970,178 @@ def save_to_db(conn: sqlite3.Connection, endpoint_name: str, data, cal_date: str
         conn.commit()
 
     return count
+
+
+def build_brief(conn: sqlite3.Connection) -> dict:
+    """Build the local-day morning brief from stored data only."""
+    local_today = today()
+    date_text = local_today.isoformat()
+    window_start = (local_today - timedelta(days=13)).isoformat()
+    week_start = (local_today - timedelta(days=local_today.weekday())).isoformat()
+
+    def one(sql: str, params=()) -> dict | None:
+        rows = query(conn, sql, params)
+        return rows[0] if rows else None
+
+    freshness = one(
+        """SELECT
+             (SELECT sync_date FROM sync_log WHERE status = 'ok'
+              ORDER BY sync_date DESC, id DESC LIMIT 1) AS last_sync_ok,
+             (SELECT sync_date FROM sync_log ORDER BY sync_date DESC, id DESC LIMIT 1) AS attempt_at,
+             (SELECT status FROM sync_log ORDER BY sync_date DESC, id DESC LIMIT 1) AS attempt_status,
+             (SELECT error FROM sync_log ORDER BY sync_date DESC, id DESC LIMIT 1) AS attempt_error,
+             COALESCE(
+               (SELECT last_sync FROM device WHERE last_sync IS NOT NULL ORDER BY last_sync DESC LIMIT 1),
+               (SELECT json_extract(raw_json, '$') FROM user_profile WHERE key = 'sync_timestamp')
+             ) AS garmin_last_reported"""
+    )
+    last_attempt = (
+        {"at": freshness["attempt_at"], "status": freshness["attempt_status"], "error": freshness["attempt_error"]}
+        if freshness["attempt_at"] is not None or freshness["attempt_status"] is not None
+        else None
+    )
+
+    sleep_row = one(
+        """WITH current AS (
+               SELECT * FROM sleep WHERE calendar_date = ?
+             ), last AS (
+               SELECT calendar_date, ROUND(sleep_time_seconds / 3600.0, 2) AS hours,
+                      sleep_score_feedback AS feedback
+               FROM sleep WHERE sleep_time_seconds IS NOT NULL
+               ORDER BY calendar_date DESC LIMIT 1
+             )
+             SELECT current.sleep_time_seconds,
+                    CAST(ROUND(current.deep_sleep_seconds / 60.0) AS INTEGER) AS deep_min,
+                    CAST(ROUND(current.light_sleep_seconds / 60.0) AS INTEGER) AS light_min,
+                    CAST(ROUND(current.rem_sleep_seconds / 60.0) AS INTEGER) AS rem_min,
+                    CAST(ROUND(current.awake_sleep_seconds / 60.0) AS INTEGER) AS awake_min,
+                    current.awake_count, current.average_hr_sleep AS avg_hr,
+                    current.average_spo2 AS avg_spo2, current.avg_sleep_stress AS avg_stress,
+                    current.sleep_score_feedback AS feedback, current.sleep_score_insight AS insight,
+                    CAST(ROUND(current.nap_time_seconds / 60.0) AS INTEGER) AS nap_minutes,
+                    current.scored_at, last.calendar_date AS last_calendar_date,
+                    last.hours AS last_hours, last.feedback AS last_feedback
+             FROM (SELECT 1) LEFT JOIN current ON 1 LEFT JOIN last ON 1""",
+        (date_text,),
+    )
+    last_scored = (
+        {
+            "calendar_date": sleep_row["last_calendar_date"],
+            "hours": sleep_row["last_hours"],
+            "feedback": sleep_row["last_feedback"],
+        }
+        if sleep_row["last_calendar_date"] is not None
+        else None
+    )
+    sleep = {
+        "calendar_date": date_text,
+        "pending": sleep_row is None or sleep_row["sleep_time_seconds"] is None,
+        "hours": round(sleep_row["sleep_time_seconds"] / 3600, 2)
+        if sleep_row and sleep_row["sleep_time_seconds"] is not None
+        else None,
+        "deep_min": sleep_row["deep_min"] if sleep_row else None,
+        "light_min": sleep_row["light_min"] if sleep_row else None,
+        "rem_min": sleep_row["rem_min"] if sleep_row else None,
+        "awake_min": sleep_row["awake_min"] if sleep_row else None,
+        "awake_count": sleep_row["awake_count"] if sleep_row else None,
+        "avg_hr": sleep_row["avg_hr"] if sleep_row else None,
+        "avg_spo2": sleep_row["avg_spo2"] if sleep_row else None,
+        "avg_stress": sleep_row["avg_stress"] if sleep_row else None,
+        "feedback": sleep_row["feedback"] if sleep_row else None,
+        "insight": sleep_row["insight"] if sleep_row else None,
+        "nap_minutes": sleep_row["nap_minutes"] if sleep_row else None,
+        "last_scored": last_scored,
+    }
+
+    hrv = one(
+        """SELECT calendar_date, COALESCE(last_night, last_night_avg) AS last_night,
+                  baseline_low, baseline_upper, status, weekly_avg
+           FROM hrv ORDER BY calendar_date DESC LIMIT 1"""
+    )
+    readiness = one(
+        """SELECT calendar_date, score, level, feedback_short,
+                  sleep_history_factor_percent AS sleep,
+                  hrv_factor_percent AS hrv,
+                  recovery_time_factor_percent AS recovery_time,
+                  stress_history_factor_percent AS stress,
+                  acwr_factor_percent AS acwr
+           FROM training_readiness ORDER BY calendar_date DESC LIMIT 1"""
+    )
+    if readiness:
+        readiness["factors"] = {key: readiness.pop(key) for key in ("sleep", "hrv", "recovery_time", "stress", "acwr")}
+
+    daily = one(
+        """SELECT total_steps AS steps, resting_heart_rate AS resting_hr,
+                  average_stress_level AS stress_avg, body_battery_at_wake,
+                  body_battery_most_recent,
+                  moderate_intensity_minutes + vigorous_intensity_minutes AS intensity_minutes
+           FROM daily_summary WHERE calendar_date = ?""",
+        (date_text,),
+    )
+    activity = one(
+        """SELECT a.activity_id, a.activity_name AS name, a.activity_type AS type,
+                  a.start_time_local AS start, ROUND(a.duration_seconds / 60.0, 1) AS duration_min,
+                  ROUND(a.distance_meters / 1000.0, 2) AS distance_km,
+                  a.average_hr AS avg_hr, a.training_load,
+                  w.temperature, w.apparent_temperature, w.humidity, w.weather_type
+           FROM activity a LEFT JOIN activity_weather w USING (activity_id)
+           ORDER BY a.start_time_local DESC LIMIT 1"""
+    )
+    if activity:
+        weather = {
+            key: activity.pop(key) for key in ("temperature", "apparent_temperature", "humidity", "weather_type")
+        }
+        activity["weather"] = weather if any(value is not None for value in weather.values()) else None
+
+    load = one(
+        """SELECT
+             (SELECT SUM(training_load) FROM activity WHERE DATE(start_time_local) >= ?) AS training_load_sum,
+             (SELECT COUNT(*) FROM activity WHERE DATE(start_time_local) >= ?) AS activity_count,
+             COUNT(DISTINCT s.activity_id) AS strength_sessions_this_week,
+             COUNT(*) AS sets_this_week
+           FROM activity_exercise_sets s JOIN activity a USING (activity_id)
+           WHERE DATE(a.start_time_local) >= ?""",
+        (window_start, window_start, week_start),
+    )
+    load = {"days": 14, **load}
+
+    weight = one(
+        """WITH normalized AS (
+               SELECT CASE
+                 WHEN calendar_date GLOB '[0-9]*' AND length(calendar_date) = 10
+                      AND calendar_date NOT LIKE '%-%' THEN date(calendar_date, 'unixepoch')
+                 ELSE calendar_date END AS calendar_date
+               FROM weight
+             )
+             SELECT calendar_date AS last_date,
+                    CAST(julianday(?) - julianday(calendar_date) AS INTEGER) AS days_ago
+             FROM normalized WHERE calendar_date IS NOT NULL
+             ORDER BY calendar_date DESC LIMIT 1""",
+        (date_text,),
+    ) or {"last_date": None, "days_ago": None}
+    weight["scale_dead"] = weight["days_ago"] is None or weight["days_ago"] > 30
+
+    from garmin_mcp.sync import sync_in_progress
+
+    return {
+        "date": date_text,
+        "generated_at": now_local().isoformat(timespec="seconds"),
+        "timezone": str(LOCAL_TZ),
+        "freshness": {
+            "last_sync_ok": freshness["last_sync_ok"],
+            "last_sync_attempt": last_attempt,
+            "sync_in_progress": sync_in_progress(),
+            "garmin_last_reported": freshness["garmin_last_reported"],
+            "sleep_scored_at": sleep_row["scored_at"] if sleep_row else None,
+        },
+        "sleep": sleep,
+        "hrv": hrv,
+        "readiness": readiness,
+        "today": daily,
+        "last_activity": activity,
+        "load": load,
+        "weight": weight,
+    }
 
 
 # ---------------------------------------------------------------------------

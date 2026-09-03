@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 from d1_helpers import execute_sql_file
+from garmin_mcp.db import today
 
 PROJECT_DIR = Path(__file__).parent
 DB_PATH = PROJECT_DIR / "garmin.db"
@@ -74,11 +75,12 @@ def main():
     if full:
         stmts = extract_intraday(conn)
     else:
-        from datetime import date, timedelta
-        today = date.today().isoformat()
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
-        day_before = (date.today() - timedelta(days=2)).isoformat()
-        stmts = extract_intraday(conn, today) + extract_intraday(conn, yesterday) + extract_intraday(conn, day_before)
+        from datetime import timedelta
+
+        current_day = today()
+        yesterday = (current_day - timedelta(days=1)).isoformat()
+        day_before = (current_day - timedelta(days=2)).isoformat()
+        stmts = extract_intraday(conn, current_day.isoformat()) + extract_intraday(conn, yesterday) + extract_intraday(conn, day_before)
 
     conn.close()
 

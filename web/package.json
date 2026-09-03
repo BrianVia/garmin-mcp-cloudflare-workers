@@ -8,7 +8,8 @@
     "build": "vite build client",
     "deploy": "vite build client && wrangler deploy",
     "db:migrate": "wrangler d1 execute garmin-health --file=migrations/0001_schema.sql",
-    "db:migrate:local": "wrangler d1 execute garmin-health --local --file=migrations/0001_schema.sql"
+    "db:migrate:local": "wrangler d1 execute garmin-health --local --file=migrations/0001_schema.sql",
+    "db:migrate:0005": "wrangler d1 execute garmin-health --remote --file=migrations/0005_sleep_scored_at.sql"
   },
   "dependencies": {
     "hono": "^4.12.12",

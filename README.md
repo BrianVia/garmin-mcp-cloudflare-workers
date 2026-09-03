@@ -91,16 +91,17 @@ Works with:
 - **[OpenClaw](https://github.com/nicobailey/OpenClaw)** and other open-source MCP clients
 - **Any MCP-compatible tool** — the server follows the standard [MCP protocol](https://spec.modelcontextprotocol.io/)
 
-6 tools are available to the AI:
+7 tools are available to the AI:
 
 | Tool | What It Does |
 |------|-------------|
 | `garmin_schema` | Show all 47 tables, columns, and row counts |
 | `garmin_query` | Run any SELECT query against the 47-table database |
+| `garmin_brief` | Last night's sleep and today's non-averaged health, activity, load, weight, and freshness |
 | `garmin_health_summary` | Health overview for any date range: daily metrics, sleep, training readiness, endurance score, hill score, race predictions |
 | `garmin_activities` | List/filter activities by type, date, distance — includes power, HR, training load, location |
-| `garmin_trends` | Weekly/monthly trends for 17 metrics: `resting_hr`, `hrv`, `stress`, `steps`, `sleep_hours`, `body_battery`, `spo2`, `training_readiness`, `floors`, `calories`, `active_minutes`, `respiration`, `weight`, `endurance_score`, `hill_score`, `race_5k`, `race_10k` |
-| `garmin_sync` | Pull latest data from Garmin without leaving the chat |
+| `garmin_trends` | Weekly/monthly trends for 18 metrics: `resting_hr`, `hrv`, `hrv_weekly`, `stress`, `steps`, `sleep_hours`, `body_battery`, `spo2`, `training_readiness`, `floors`, `calories`, `active_minutes`, `respiration`, `weight`, `endurance_score`, `hill_score`, `race_5k`, `race_10k` |
+| `garmin_sync` | Kick an out-of-process sync (same script as cron); returns started/busy |
 
 The AI can combine these tools to answer complex questions — correlating sleep with training load, spotting trends you wouldn't notice, comparing HR zones across activities, predicting race times, or building custom reports across years of data. It can also query per-activity details like splits, weather, and exercise sets via `garmin_query`.
 
@@ -311,16 +312,17 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 ### 3. Connect AI (Optional)
 
-The MCP server lets any AI assistant query your Garmin database. It exposes 6 tools over the [Model Context Protocol](https://modelcontextprotocol.io/):
+The MCP server lets any AI assistant query your Garmin database. It exposes 7 tools over the [Model Context Protocol](https://modelcontextprotocol.io/):
 
 | Tool | What It Does |
 |------|-------------|
 | `garmin_schema` | Show all 47 tables, columns, and row counts |
 | `garmin_query` | Run any SELECT query against the database |
+| `garmin_brief` | Last night's sleep and today's non-averaged health, activity, load, weight, and freshness |
 | `garmin_health_summary` | Health overview: daily metrics, sleep, training readiness, endurance, hill score, race predictions |
 | `garmin_activities` | List/filter activities by type, date, distance — includes power, HR, training load |
-| `garmin_trends` | Weekly/monthly trends for 17 metrics: `resting_hr`, `hrv`, `stress`, `steps`, `sleep_hours`, `body_battery`, `spo2`, `training_readiness`, `floors`, `calories`, `active_minutes`, `respiration`, `weight`, `endurance_score`, `hill_score`, `race_5k`, `race_10k` |
-| `garmin_sync` | Pull latest data from Garmin without leaving the chat |
+| `garmin_trends` | Weekly/monthly trends for 18 metrics: `resting_hr`, `hrv`, `hrv_weekly`, `stress`, `steps`, `sleep_hours`, `body_battery`, `spo2`, `training_readiness`, `floors`, `calories`, `active_minutes`, `respiration`, `weight`, `endurance_score`, `hill_score`, `race_5k`, `race_10k` |
+| `garmin_sync` | Kick an out-of-process sync (same script as cron); returns started/busy |
 
 #### Claude Code (CLI, Desktop App, VS Code, JetBrains)
 

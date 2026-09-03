@@ -29,7 +29,7 @@ classifiers = [
 dependencies = [
     "playwright>=1.40",
     "httpx>=0.25",
-    "mcp[cli]>=1.0",
+    "mcp[cli]>=1.0,<2",
     "python-dotenv>=1.0",
 ]
 

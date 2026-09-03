@@ -3,13 +3,16 @@ Garmin MCP server — exposes health and activity data via FastMCP tools.
 """
 
 import json
-from datetime import date, timedelta
-
 import os
+from datetime import timedelta
 
+import anyio
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
-from .db import get_connection, init_db, query
+from .db import build_brief, get_connection, init_db, query, today
+from .sync import start_sync, sync_status
 
 mcp = FastMCP("garmin")
 
@@ -83,14 +86,15 @@ def garmin_health_summary(start_date: str = "", end_date: str = "", days: int = 
     """Health overview for a date range.
 
     If start_date/end_date are omitted the most recent *days* days are used.
+    For LAST NIGHT / today use garmin_brief; this tool returns period averages.
     Returns averages for steps, HR, stress, body battery, SpO2, respiration,
     calories (daily_summary), sleep metrics (sleep table), and training
     readiness score.
     """
     if not end_date:
-        end_date = str(date.today())
+        end_date = str(today())
     if not start_date:
-        start_date = str(date.today() - timedelta(days=days - 1))
+        start_date = str(today() - timedelta(days=days - 1))
 
     conn = get_connection()
     try:
@@ -211,6 +215,9 @@ def garmin_activities(
 ) -> str:
     """List activities with optional filters by type and date range.
 
+    activity_type is a substring match: 'run' matches running and
+    treadmill_running; 'cycl' matches cycling and indoor_cycling; 'swim'
+    matches lap_swimming; 'strength' matches strength_training.
     Returns key fields: name, type, date, duration_min, distance_km,
     calories, avg_hr, elevation, power, training_load, location.
     """
@@ -218,7 +225,7 @@ def garmin_activities(
     params: list = []
 
     if activity_type:
-        conditions.append("LOWER(activity_type) = LOWER(?)")
+        conditions.append("LOWER(activity_type) LIKE '%' || LOWER(?) || '%'")
         params.append(activity_type)
     if start_date:
         conditions.append("DATE(start_time_local) >= ?")
@@ -338,6 +345,12 @@ _TREND_METRICS = {
     },
     "hrv": {
         "table": "hrv",
+        "expr": "ROUND(AVG(COALESCE(last_night, last_night_avg)), 1)",
+        "not_null": "COALESCE(last_night, last_night_avg) IS NOT NULL",
+        "date_col": "calendar_date",
+    },
+    "hrv_weekly": {
+        "table": "hrv",
         "expr": "ROUND(AVG(weekly_avg), 1)",
         "not_null": "weekly_avg IS NOT NULL",
         "date_col": "calendar_date",
@@ -375,7 +388,7 @@ def garmin_trends(metric: str, period: str = "month") -> str:
 
     Supported metrics: resting_hr, stress, steps, sleep_hours, body_battery,
     spo2, training_readiness, floors, calories, active_minutes, respiration,
-    weight, hrv, endurance_score, hill_score, race_5k, race_10k.
+    weight, hrv, hrv_weekly, endurance_score, hill_score, race_5k, race_10k.
     period: 'week' or 'month'.
     """
     if metric not in _TREND_METRICS:
@@ -418,15 +431,60 @@ def garmin_trends(metric: str, period: str = "month") -> str:
 
 
 @mcp.tool()
-def garmin_sync() -> str:
-    """Trigger an incremental sync to fetch the latest Garmin data."""
-    try:
-        from .sync import incremental_sync
+async def garmin_sync(wait_seconds: int = 0) -> str:
+    """Kicks the same sync_cron.sh the cron uses, in a separate process.
 
-        result = incremental_sync()
-        return json.dumps({"status": "success", "result": result}, indent=2, default=str)
+    Returns immediately (status started/busy) unless wait_seconds > 0.
+    Refuses to start a second sync while one is running.
+    """
+    try:
+        result = start_sync()
+        if wait_seconds > 0:
+            deadline = anyio.current_time() + wait_seconds
+            while (remaining := deadline - anyio.current_time()) > 0:
+                await anyio.sleep(min(5, remaining))
+                result = sync_status()
+                if not result["in_progress"]:
+                    break
+        return json.dumps(result, indent=2, default=str)
     except Exception as exc:
         return json.dumps({"status": "error", "error": str(exc)})
+
+
+@mcp.tool()
+def garmin_brief() -> str:
+    """Use this for 'how did I sleep / how am I today'.
+
+    Last night's sleep (wake date = today), sleep_pending flag, naps kept
+    separate, HRV last night vs baseline, readiness factors, today's steps,
+    last activity with weather, 14-day load, strength sets this week, weight
+    staleness, and data freshness. Never averaged.
+    """
+    conn = get_connection()
+    try:
+        return json.dumps(build_brief(conn), indent=2, default=str)
+    finally:
+        conn.close()
+
+
+@mcp.custom_route("/sync", methods=["POST"])
+async def start_sync_route(_request: Request) -> JSONResponse:
+    result = start_sync()
+    return JSONResponse(result, status_code=202 if result["status"] == "started" else 409)
+
+
+@mcp.custom_route("/sync", methods=["GET"])
+async def sync_status_route(_request: Request) -> JSONResponse:
+    return JSONResponse(sync_status())
+
+
+@mcp.custom_route("/brief", methods=["GET"])
+async def brief_route(_request: Request) -> JSONResponse:
+    conn = get_connection()
+    try:
+        return JSONResponse(build_brief(conn))
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -438,8 +496,6 @@ def _run_http():
     """Run MCP server over HTTP with optional bearer token auth."""
     import uvicorn
     from mcp.server.transport_security import TransportSecuritySettings
-    from starlette.requests import Request
-    from starlette.responses import JSONResponse
 
     mcp.settings.host = "0.0.0.0"
     mcp.settings.port = int(os.environ.get("PORT", 8000))
@@ -477,7 +533,6 @@ def _run_http():
         log_level="info",
     )
     server = uvicorn.Server(config)
-    import anyio
     anyio.run(server.serve)
 
 

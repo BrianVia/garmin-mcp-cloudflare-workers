@@ -13,6 +13,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from d1_helpers import execute_sql_file
+from garmin_mcp.db import today
 
 PROJECT_DIR = Path(__file__).parent
 DB_PATH = PROJECT_DIR / "garmin.db"
@@ -77,9 +78,9 @@ def main():
     full = "--full" in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     target = args[0] if args else None
-    today = target or date.today().isoformat()
-    yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
-    day_before = (date.fromisoformat(today) - timedelta(days=2)).isoformat()
+    current_day = target or today().isoformat()
+    yesterday = (date.fromisoformat(current_day) - timedelta(days=1)).isoformat()
+    day_before = (date.fromisoformat(current_day) - timedelta(days=2)).isoformat()
 
     conn = sqlite3.connect(str(DB_PATH))
 
@@ -100,7 +101,7 @@ def main():
                 stmts = generate_upserts(
                     conn, table,
                     "WHERE calendar_date BETWEEN ? AND ?",
-                    [day_before, today],
+                    [day_before, current_day],
                 )
                 all_sql.extend(stmts)
             except sqlite3.OperationalError:
@@ -111,13 +112,13 @@ def main():
             stmts = generate_upserts(
                 conn, "activity",
                 "WHERE DATE(start_time_local) BETWEEN ? AND ?",
-                [day_before, today],
+                [day_before, current_day],
             )
             all_sql.extend(stmts)
 
             cursor = conn.execute(
                 "SELECT activity_id FROM activity WHERE DATE(start_time_local) BETWEEN ? AND ?",
-                [day_before, today],
+                [day_before, current_day],
             )
             activity_ids = [r[0] for r in cursor.fetchall()]
 

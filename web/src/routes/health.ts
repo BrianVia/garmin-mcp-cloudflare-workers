@@ -3,12 +3,17 @@ import type { Env } from "../server";
 
 export const healthRoutes = new Hono<Env>();
 
+const TZ = "America/New_York";
+export function localDate(d: Date = new Date()): string {
+  return d.toLocaleDateString("en-CA", { timeZone: TZ }); // YYYY-MM-DD
+}
+
 function defaultRange(c: { req: { query: (k: string) => string | undefined } }) {
-  const end = c.req.query("end") || new Date().toISOString().slice(0, 10);
+  const end = c.req.query("end") || localDate();
   const days = parseInt(c.req.query("days") || "7", 10);
   const start =
     c.req.query("start") ||
-    new Date(Date.now() - (days - 1) * 86400000).toISOString().slice(0, 10);
+    localDate(new Date(Date.now() - (days - 1) * 86400000));
   return { start, end };
 }
 
@@ -108,8 +113,8 @@ healthRoutes.get("/daily", async (c) => {
 // GET /api/health/dashboard
 healthRoutes.get("/dashboard", async (c) => {
   const db = c.env.DB;
-  const today = new Date().toISOString().slice(0, 10);
-  const days14ago = new Date(Date.now() - 13 * 86400000).toISOString().slice(0, 10);
+  const today = localDate();
+  const days14ago = localDate(new Date(Date.now() - 13 * 86400000));
 
   const [daily14, sleep14, training14, hrv14, fitnessAge, battery14] = await Promise.all([
     db.prepare(
@@ -161,18 +166,29 @@ healthRoutes.get("/dashboard", async (c) => {
 
 // GET /api/health/today
 healthRoutes.get("/today", async (c) => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDate();
   const db = c.env.DB;
 
-  const [daily, sleep, hrv, training, battery] = await Promise.all([
+  const [daily, sleep, hrv, training, battery, lastSync] = await Promise.all([
     db.prepare(`SELECT * FROM daily_summary WHERE calendar_date = ?1`).bind(today).first(),
     db.prepare(`SELECT * FROM sleep WHERE calendar_date = ?1`).bind(today).first(),
     db.prepare(`SELECT * FROM hrv WHERE calendar_date = ?1`).bind(today).first(),
     db.prepare(`SELECT * FROM training_readiness WHERE calendar_date = ?1`).bind(today).first(),
     db.prepare(`SELECT * FROM body_battery WHERE calendar_date = ?1`).bind(today).first(),
+    db.prepare(`SELECT * FROM sync_log ORDER BY sync_date DESC, id DESC LIMIT 1`).first(),
   ]);
 
-  return c.json({ date: today, daily, sleep, hrv, training_readiness: training, body_battery: battery });
+  return c.json({
+    date: today,
+    timezone: TZ,
+    sleep_pending: !sleep || sleep.sleep_time_seconds == null,
+    last_sync: lastSync,
+    daily,
+    sleep,
+    hrv,
+    training_readiness: training,
+    body_battery: battery,
+  });
 });
 
 // GET /api/health/sleep

@@ -5,13 +5,82 @@ Fetches today's and yesterday's data from Garmin Connect and saves it
 directly to SQLite via save_to_db().
 """
 
+import fcntl
 import logging
+import os
+import subprocess
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from garmin_mcp.db import get_connection, init_db, save_to_db
+from garmin_mcp.db import get_connection, init_db, save_to_db, today
 
 logger = logging.getLogger(__name__)
+PROJECT_DIR = Path(__file__).parent.parent
+PROFILE_DIR = PROJECT_DIR / "browser_profile"
+SESSION_FILE = PROJECT_DIR / "garmin_session.json"
+LOCK_FILE = Path("/tmp/garmin-sync.lock")
+
+env_file = PROJECT_DIR / ".env"
+if env_file.exists():
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip())
+
+
+def sync_in_progress() -> bool:
+    with LOCK_FILE.open("a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        return False
+
+
+def sync_status(conn=None) -> dict:
+    owns_connection = conn is None
+    if owns_connection:
+        conn = get_connection()
+        init_db(conn)
+    try:
+        last_ok = conn.execute(
+            "SELECT sync_date FROM sync_log WHERE status = 'ok' ORDER BY sync_date DESC, id DESC LIMIT 1"
+        ).fetchone()
+        last_attempt = conn.execute(
+            """SELECT sync_date AS at, status, records_upserted, error
+               FROM sync_log ORDER BY sync_date DESC, id DESC LIMIT 1"""
+        ).fetchone()
+        return {
+            "in_progress": sync_in_progress(),
+            "last_ok": last_ok[0] if last_ok else None,
+            "last_attempt": {
+                "at": last_attempt[0],
+                "status": last_attempt[1],
+                "records_upserted": last_attempt[2],
+                "error": last_attempt[3],
+            }
+            if last_attempt
+            else None,
+        }
+    finally:
+        if owns_connection:
+            conn.close()
+
+
+def start_sync() -> dict:
+    if sync_in_progress():
+        return {"status": "busy", **sync_status()}
+    process = subprocess.Popen(
+        [str(PROJECT_DIR / "sync_cron.sh")],
+        cwd=PROJECT_DIR,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return {"status": "started", "pid": process.pid, **sync_status()}
 
 
 def _known_activity_detail_ids(conn) -> set[int]:
@@ -47,22 +116,8 @@ def incremental_sync(target_date: str = None) -> dict:
     """
     from garmin_client import GarminClient
 
-    today = target_date or date.today().isoformat()
-    yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
-
-    PROJECT_DIR = Path(__file__).parent.parent
-    PROFILE_DIR = PROJECT_DIR / "browser_profile"
-
-    # Load .env if present
-    import os
-
-    env_file = PROJECT_DIR / ".env"
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, _, value = line.partition("=")
-                os.environ.setdefault(key.strip(), value.strip())
+    sync_day = target_date or today().isoformat()
+    yesterday = (date.fromisoformat(sync_day) - timedelta(days=1)).isoformat()
 
     email = os.environ.get("GARMIN_EMAIL", "")
     password = os.environ.get("GARMIN_PASSWORD", "")
@@ -85,7 +140,6 @@ def incremental_sync(target_date: str = None) -> dict:
         if n > 0:
             counts[endpoint_name] = counts.get(endpoint_name, 0) + n
 
-    SESSION_FILE = PROJECT_DIR / "garmin_session.json"
     client = GarminClient(
         email=email,
         password=password,
@@ -95,19 +149,29 @@ def incremental_sync(target_date: str = None) -> dict:
         session_file=SESSION_FILE,
     )
 
-    logger.info("Starting incremental sync for %s (+ %s)", today, yesterday)
+    logger.info("Starting incremental sync for %s (+ %s)", sync_day, yesterday)
 
     try:
         if not client.login():
-            return {"status": "error", "message": "Login failed"}
+            raise RuntimeError("Login failed")
 
         client.fetch_all(
-            target_date=today,
+            target_date=sync_day,
             start_date=yesterday,
-            end_date=today,
+            end_date=sync_day,
             on_batch=on_batch,
             known_activity_ids=known_activity_ids,
         )
+    except Exception as exc:
+        conn.execute(
+            """INSERT INTO sync_log
+               (sync_date, sync_type, records_upserted, status, error)
+               VALUES (?, ?, ?, 'error', ?)""",
+            (datetime.now(timezone.utc).isoformat(), "incremental_sync", sum(counts.values()), str(exc)[:500]),
+        )
+        conn.commit()
+        conn.close()
+        raise
     finally:
         client.close()
 
@@ -125,7 +189,7 @@ def incremental_sync(target_date: str = None) -> dict:
 
     return {
         "status": "ok",
-        "target_date": today,
+        "target_date": sync_day,
         "yesterday": yesterday,
         "records": counts,
         "total_upserted": total,
