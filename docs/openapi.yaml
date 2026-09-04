@@ -1,0 +1,857 @@
+openapi: 3.1.0
+info:
+  title: garmin-givemydata HTTP API
+  version: 0.1.7
+  description: |
+    Two HTTP surfaces share this spec.
+
+    **Worker** (`https://garmin.brianvia.com`): the Cloudflare Worker in `web/src`
+    reading from D1. Every `/api/*` route is unauthenticated except `/api/sync`.
+
+    **MCP server** (`https://garmin.flatmeadow.com`): the FastMCP HTTP transport in
+    `garmin_mcp/server.py`, running on the sync host. Every route requires
+    `Authorization: Bearer <MCP_API_KEY>`. `/mcp` is the Model Context Protocol
+    endpoint (JSON-RPC over streamable HTTP); the other routes are plain JSON.
+
+    Dates are `YYYY-MM-DD` in America/New_York. A `sleep.calendar_date` is the
+    **wake** date. `sleep_time_seconds = null` means Garmin has not scored the night
+    yet, not that the watch was off.
+
+security: []
+
+servers:
+  - url: https://garmin.brianvia.com
+    description: Cloudflare Worker (D1-backed dashboard API)
+  - url: https://garmin.flatmeadow.com
+    description: MCP server on the sync host (bearer auth)
+
+tags:
+  - name: meta
+  - name: health
+  - name: sleep
+  - name: activities
+  - name: trends
+  - name: sync
+  - name: mcp
+
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      description: The MCP server's `MCP_API_KEY`. The Worker's `/api/sync` uses the same value as its `SYNC_TOKEN` secret.
+
+  parameters:
+    start:
+      name: start
+      in: query
+      schema: { $ref: "#/components/schemas/Date" }
+      description: Inclusive start date. Defaults to `end - (days - 1)`.
+    end:
+      name: end
+      in: query
+      schema: { $ref: "#/components/schemas/Date" }
+      description: Inclusive end date. Defaults to today (America/New_York).
+    days:
+      name: days
+      in: query
+      schema: { type: integer, default: 7, minimum: 1 }
+      description: Window length used only when `start` is omitted.
+    dateParam:
+      name: date
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/Date" }
+
+  schemas:
+    Date:
+      type: string
+      format: date
+      pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+      examples: ["2026-09-03"]
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+    Row:
+      description: One database row. Column names match the D1/SQLite schema in `web/migrations`.
+      type: object
+      additionalProperties: true
+    DateRange:
+      type: object
+      properties:
+        start: { $ref: "#/components/schemas/Date" }
+        end: { $ref: "#/components/schemas/Date" }
+    SyncLogRow:
+      type: object
+      properties:
+        id: { type: integer }
+        sync_date: { type: string, format: date-time }
+        sync_type: { type: string, examples: [incremental_sync] }
+        records_upserted: { type: integer }
+        status: { type: string, enum: [ok, error] }
+        error: { type: [string, "null"] }
+        created_at: { type: string }
+    TimeSeriesPoint:
+      type: object
+      properties:
+        timestamp_gmt: { type: integer, description: Unix epoch milliseconds }
+        value: { type: [number, "null"] }
+    SleepSummary:
+      type: object
+      properties:
+        calendar_date: { $ref: "#/components/schemas/Date" }
+        sleep_hours: { type: [number, "null"] }
+        deep_min: { type: [number, "null"] }
+        light_min: { type: [number, "null"] }
+        rem_min: { type: [number, "null"] }
+        awake_min: { type: [number, "null"] }
+        average_hr_sleep: { type: [number, "null"] }
+        average_spo2: { type: [number, "null"] }
+        avg_sleep_stress: { type: [number, "null"] }
+        sleep_score_feedback: { type: [string, "null"] }
+        sleep_score_insight: { type: [string, "null"] }
+    ActivityListItem:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        type: { type: string, examples: [running, treadmill_running, walking, strength_training] }
+        date: { type: string, description: "Local start time, `YYYY-MM-DD HH:MM:SS`" }
+        duration_min: { type: [number, "null"] }
+        distance_km: { type: [number, "null"] }
+        calories: { type: [number, "null"] }
+        avg_hr: { type: [number, "null"] }
+        max_hr: { type: [number, "null"] }
+        elevation_gain_m: { type: [number, "null"] }
+        avg_power_w: { type: [number, "null"] }
+        training_load: { type: [number, "null"] }
+        aerobic_te: { type: [number, "null"] }
+        location: { type: [string, "null"] }
+    TrendResponse:
+      type: object
+      properties:
+        metric: { type: string }
+        period: { type: string, enum: [daily, week, month] }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              period: { type: string, description: "`YYYY-MM-DD`, `YYYY-Www`, or `YYYY-MM`" }
+              value: { type: [number, "null"] }
+              data_points: { type: integer }
+    SyncStatus:
+      type: object
+      properties:
+        in_progress:
+          type: boolean
+          description: True while `sync_cron.sh` holds `/tmp/garmin-sync.lock`.
+        last_ok: { type: [string, "null"], format: date-time }
+        last_attempt:
+          type: [object, "null"]
+          properties:
+            at: { type: string, format: date-time }
+            status: { type: string, enum: [ok, error] }
+            records_upserted: { type: integer }
+            error: { type: [string, "null"] }
+    SyncStart:
+      allOf:
+        - $ref: "#/components/schemas/SyncStatus"
+        - type: object
+          properties:
+            status: { type: string, enum: [started, busy] }
+            pid: { type: integer, description: Present when `status` is `started`. }
+    Brief:
+      description: The morning brief. Every key is always present; values are null when unknown. Nothing is averaged.
+      type: object
+      properties:
+        date: { $ref: "#/components/schemas/Date" }
+        generated_at: { type: string, format: date-time }
+        timezone: { type: string, examples: [America/New_York] }
+        freshness:
+          type: object
+          properties:
+            last_sync_ok: { type: [string, "null"], format: date-time }
+            last_sync_attempt:
+              type: [object, "null"]
+              properties:
+                at: { type: string }
+                status: { type: string }
+                error: { type: [string, "null"] }
+            sync_in_progress: { type: boolean }
+            garmin_last_reported:
+              type: [string, "null"]
+              description: Garmin's own last-sync timestamp (device.last_sync, else the wellness syncTimestamp endpoint).
+            sleep_scored_at: { type: [string, "null"], description: When today's night was first seen scored. }
+        sleep:
+          type: object
+          properties:
+            calendar_date: { $ref: "#/components/schemas/Date" }
+            pending: { type: boolean, description: True when Garmin has not scored last night yet. }
+            hours: { type: [number, "null"] }
+            deep_min: { type: [integer, "null"] }
+            light_min: { type: [integer, "null"] }
+            rem_min: { type: [integer, "null"] }
+            awake_min: { type: [integer, "null"] }
+            awake_count: { type: [integer, "null"] }
+            avg_hr: { type: [number, "null"] }
+            avg_spo2: { type: [number, "null"] }
+            avg_stress: { type: [number, "null"] }
+            feedback: { type: [string, "null"] }
+            insight: { type: [string, "null"] }
+            nap_minutes: { type: [integer, "null"], description: Kept separate; never added to last night. }
+            last_scored:
+              type: [object, "null"]
+              properties:
+                calendar_date: { $ref: "#/components/schemas/Date" }
+                hours: { type: number }
+                feedback: { type: [string, "null"] }
+        hrv:
+          type: [object, "null"]
+          properties:
+            calendar_date: { $ref: "#/components/schemas/Date" }
+            last_night: { type: [number, "null"] }
+            baseline_low: { type: [number, "null"] }
+            baseline_upper: { type: [number, "null"] }
+            status: { type: [string, "null"], examples: [BALANCED, UNBALANCED, LOW] }
+            weekly_avg: { type: [number, "null"] }
+        readiness:
+          type: [object, "null"]
+          properties:
+            calendar_date: { $ref: "#/components/schemas/Date" }
+            score: { type: [number, "null"] }
+            level: { type: [string, "null"] }
+            feedback_short: { type: [string, "null"] }
+            factors:
+              type: object
+              description: Garmin factor percents; use these instead of the RHR-heavy score.
+              properties:
+                sleep: { type: [number, "null"] }
+                hrv: { type: [number, "null"] }
+                recovery_time: { type: [number, "null"] }
+                stress: { type: [number, "null"] }
+                acwr: { type: [number, "null"] }
+        today:
+          type: [object, "null"]
+          properties:
+            steps: { type: [integer, "null"] }
+            resting_hr: { type: [integer, "null"] }
+            stress_avg: { type: [number, "null"] }
+            body_battery_at_wake: { type: [integer, "null"] }
+            body_battery_most_recent: { type: [integer, "null"] }
+            intensity_minutes: { type: [integer, "null"] }
+        last_activity:
+          type: [object, "null"]
+          properties:
+            activity_id: { type: integer }
+            name: { type: string }
+            type: { type: [string, "null"] }
+            start: { type: string }
+            duration_min: { type: [number, "null"] }
+            distance_km: { type: [number, "null"] }
+            avg_hr: { type: [number, "null"] }
+            training_load: { type: [number, "null"] }
+            weather:
+              type: [object, "null"]
+              properties:
+                temperature: { type: [number, "null"], description: Fahrenheit }
+                apparent_temperature: { type: [number, "null"] }
+                humidity: { type: [number, "null"] }
+                weather_type: { type: [string, "null"] }
+        load:
+          type: object
+          properties:
+            days: { type: integer, const: 14 }
+            training_load_sum: { type: [number, "null"] }
+            activity_count: { type: integer }
+            strength_sessions_this_week: { type: integer, description: Activities with exercise sets since Monday. }
+            sets_this_week: { type: integer }
+        weight:
+          type: object
+          properties:
+            last_date: { type: [string, "null"] }
+            days_ago: { type: [integer, "null"] }
+            scale_dead: { type: boolean, description: True when no reading in 30 days. }
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Missing or wrong bearer token
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RowList:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: array
+            items: { $ref: "#/components/schemas/Row" }
+
+paths:
+  # ------------------------------------------------------------------ Worker
+  /api/meta:
+    get:
+      operationId: getApiMeta
+      tags: [meta]
+      summary: Table row counts, last sync, and date range
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tables:
+                    type: object
+                    additionalProperties: { type: integer }
+                  last_sync:
+                    type: [object, "null"]
+                    properties:
+                      sync_date: { type: string }
+                      records_upserted: { type: integer }
+                  date_range:
+                    type: [object, "null"]
+                    properties:
+                      earliest: { $ref: "#/components/schemas/Date" }
+                      latest: { $ref: "#/components/schemas/Date" }
+
+  /api/health/summary:
+    get:
+      operationId: getApiHealthSummary
+      tags: [health]
+      summary: Period averages (not last night)
+      parameters:
+        - $ref: "#/components/parameters/start"
+        - $ref: "#/components/parameters/end"
+        - $ref: "#/components/parameters/days"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  period: { $ref: "#/components/schemas/DateRange" }
+                  daily: { $ref: "#/components/schemas/Row" }
+                  sleep: { $ref: "#/components/schemas/Row" }
+                  training_readiness: { $ref: "#/components/schemas/Row" }
+                  endurance: { $ref: "#/components/schemas/Row" }
+                  hill_score: { $ref: "#/components/schemas/Row" }
+                  race_predictions: { $ref: "#/components/schemas/Row" }
+
+  /api/health/daily:
+    get:
+      operationId: getApiHealthDaily
+      tags: [health]
+      summary: One daily_summary row per day
+      parameters:
+        - $ref: "#/components/parameters/start"
+        - $ref: "#/components/parameters/end"
+        - $ref: "#/components/parameters/days"
+      responses:
+        "200": { $ref: "#/components/responses/RowList" }
+
+  /api/health/dashboard:
+    get:
+      operationId: getApiHealthDashboard
+      tags: [health]
+      summary: Last 14 days of daily, sleep, readiness, HRV, body battery, plus latest fitness age
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  daily: { type: array, items: { $ref: "#/components/schemas/Row" } }
+                  sleep: { type: array, items: { $ref: "#/components/schemas/Row" } }
+                  training: { type: array, items: { $ref: "#/components/schemas/Row" } }
+                  hrv: { type: array, items: { $ref: "#/components/schemas/Row" } }
+                  fitness_age: { type: [object, "null"], additionalProperties: true }
+                  body_battery: { type: array, items: { $ref: "#/components/schemas/Row" } }
+
+  /api/health/today:
+    get:
+      operationId: getApiHealthToday
+      tags: [health]
+      summary: Today's raw rows with a sleep_pending flag and last sync
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  date: { $ref: "#/components/schemas/Date" }
+                  timezone: { type: string }
+                  sleep_pending: { type: boolean }
+                  last_sync: { oneOf: [{ $ref: "#/components/schemas/SyncLogRow" }, { type: "null" }] }
+                  daily: { oneOf: [{ $ref: "#/components/schemas/Row" }, { type: "null" }] }
+                  sleep: { oneOf: [{ $ref: "#/components/schemas/Row" }, { type: "null" }] }
+                  hrv: { oneOf: [{ $ref: "#/components/schemas/Row" }, { type: "null" }] }
+                  training_readiness: { oneOf: [{ $ref: "#/components/schemas/Row" }, { type: "null" }] }
+                  body_battery: { oneOf: [{ $ref: "#/components/schemas/Row" }, { type: "null" }] }
+
+  /api/health/sleep:
+    get:
+      operationId: getApiHealthSleep
+      tags: [sleep]
+      summary: Per-night sleep summaries
+      parameters:
+        - $ref: "#/components/parameters/start"
+        - $ref: "#/components/parameters/end"
+        - $ref: "#/components/parameters/days"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SleepSummary" }
+
+  /api/health/sleep/consistency:
+    get:
+      operationId: getApiHealthSleepConsistency
+      tags: [sleep]
+      summary: Bed and wake times per night (sleep_times)
+      parameters:
+        - $ref: "#/components/parameters/start"
+        - $ref: "#/components/parameters/end"
+        - $ref: "#/components/parameters/days"
+      responses:
+        "200": { $ref: "#/components/responses/RowList" }
+
+  /api/health/sleep/{date}:
+    get:
+      operationId: getApiHealthSleepDate
+      tags: [sleep]
+      summary: One night in detail (levels, HR, HRV, stress, body battery, respiration)
+      parameters:
+        - $ref: "#/components/parameters/dateParam"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary: { $ref: "#/components/schemas/SleepSummary" }
+                  times: { oneOf: [{ $ref: "#/components/schemas/Row" }, { type: "null" }] }
+                  levels:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        start_gmt: { type: string }
+                        end_gmt: { type: string }
+                        activity_level: { type: integer, description: "0 deep, 1 light, 2 REM, 3 awake" }
+                  heart_rate: { type: array, items: { $ref: "#/components/schemas/TimeSeriesPoint" } }
+                  hrv: { type: array, items: { $ref: "#/components/schemas/TimeSeriesPoint" } }
+                  stress: { type: array, items: { $ref: "#/components/schemas/TimeSeriesPoint" } }
+                  body_battery: { type: array, items: { $ref: "#/components/schemas/TimeSeriesPoint" } }
+                  respiration: { type: array, items: { $ref: "#/components/schemas/TimeSeriesPoint" } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/health/stress:
+    get:
+      operationId: getApiHealthStress
+      tags: [health]
+      summary: Daily stress summaries
+      parameters:
+        - $ref: "#/components/parameters/start"
+        - $ref: "#/components/parameters/end"
+        - $ref: "#/components/parameters/days"
+      responses:
+        "200": { $ref: "#/components/responses/RowList" }
+
+  /api/health/stress/{date}:
+    get:
+      operationId: getApiHealthStressDate
+      tags: [health]
+      summary: Intraday stress and body battery for one day
+      parameters:
+        - $ref: "#/components/parameters/dateParam"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary: { oneOf: [{ $ref: "#/components/schemas/Row" }, { type: "null" }] }
+                  daily: { oneOf: [{ $ref: "#/components/schemas/Row" }, { type: "null" }] }
+                  stress: { type: array, items: { $ref: "#/components/schemas/TimeSeriesPoint" } }
+                  body_battery:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: "#/components/schemas/TimeSeriesPoint"
+                        - type: object
+                          properties:
+                            status: { type: [string, "null"] }
+
+  /api/health/heart-rate:
+    get:
+      operationId: getApiHealthHeartRate
+      tags: [health]
+      summary: Daily heart-rate summaries
+      parameters:
+        - $ref: "#/components/parameters/start"
+        - $ref: "#/components/parameters/end"
+        - $ref: "#/components/parameters/days"
+      responses:
+        "200": { $ref: "#/components/responses/RowList" }
+
+  /api/health/heart-rate/{date}:
+    get:
+      operationId: getApiHealthHeartRateDate
+      tags: [health]
+      summary: Intraday heart rate for one day
+      parameters:
+        - $ref: "#/components/parameters/dateParam"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  summary: { oneOf: [{ $ref: "#/components/schemas/Row" }, { type: "null" }] }
+                  heart_rate: { type: array, items: { $ref: "#/components/schemas/TimeSeriesPoint" } }
+
+  /api/health/body-battery:
+    get:
+      operationId: getApiHealthBodyBattery
+      tags: [health]
+      summary: Daily body battery
+      parameters:
+        - $ref: "#/components/parameters/start"
+        - $ref: "#/components/parameters/end"
+        - $ref: "#/components/parameters/days"
+      responses:
+        "200": { $ref: "#/components/responses/RowList" }
+
+  /api/health/hrv:
+    get:
+      operationId: getApiHealthHrv
+      tags: [health]
+      summary: Daily HRV (use last_night, not weekly_avg, for day-to-day reading)
+      parameters:
+        - $ref: "#/components/parameters/start"
+        - $ref: "#/components/parameters/end"
+        - $ref: "#/components/parameters/days"
+      responses:
+        "200": { $ref: "#/components/responses/RowList" }
+
+  /api/health/personal-records:
+    get:
+      operationId: getApiHealthPersonalRecords
+      tags: [health]
+      summary: Personal records, newest first
+      responses:
+        "200": { $ref: "#/components/responses/RowList" }
+
+  /api/health/weight:
+    get:
+      operationId: getApiHealthWeight
+      tags: [health]
+      summary: Weight readings (grams), dates normalized to ISO
+      parameters:
+        - $ref: "#/components/parameters/start"
+        - $ref: "#/components/parameters/end"
+        - $ref: "#/components/parameters/days"
+      responses:
+        "200": { $ref: "#/components/responses/RowList" }
+
+  /api/health/training:
+    get:
+      operationId: getApiHealthTraining
+      tags: [health]
+      summary: Readiness (with factor percents), endurance, hill score, race predictions
+      parameters:
+        - $ref: "#/components/parameters/start"
+        - $ref: "#/components/parameters/end"
+        - $ref: "#/components/parameters/days"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  readiness: { type: array, items: { $ref: "#/components/schemas/Row" } }
+                  endurance: { type: array, items: { $ref: "#/components/schemas/Row" } }
+                  hill: { type: array, items: { $ref: "#/components/schemas/Row" } }
+                  race_predictions: { type: array, items: { $ref: "#/components/schemas/Row" } }
+
+  /api/activities:
+    get:
+      operationId: getApiActivities
+      tags: [activities]
+      summary: List activities, newest first
+      parameters:
+        - name: type
+          in: query
+          schema: { type: string }
+          description: Exact match on activity_type (case-insensitive). See `/api/activities/types`.
+        - name: start
+          in: query
+          schema: { $ref: "#/components/schemas/Date" }
+        - name: end
+          in: query
+          schema: { $ref: "#/components/schemas/Date" }
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ActivityListItem" }
+
+  /api/activities/types:
+    get:
+      operationId: getApiActivitiesTypes
+      tags: [activities]
+      summary: Distinct activity types with counts
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type: { type: string }
+                    count: { type: integer }
+
+  /api/activities/{id}:
+    get:
+      operationId: getApiActivitiesId
+      tags: [activities]
+      summary: One activity with splits, HR zones, weather, and exercise sets
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  activity: { $ref: "#/components/schemas/Row" }
+                  splits: { type: array, items: { $ref: "#/components/schemas/Row" } }
+                  hr_zones: { oneOf: [{ $ref: "#/components/schemas/Row" }, { type: "null" }] }
+                  weather: { oneOf: [{ $ref: "#/components/schemas/Row" }, { type: "null" }] }
+                  exercise_sets: { type: array, items: { $ref: "#/components/schemas/Row" } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/trends/metrics:
+    get:
+      operationId: getApiTrendsMetrics
+      tags: [trends]
+      summary: Supported trend metric names
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { type: string }
+
+  /api/trends/{metric}:
+    get:
+      operationId: getApiTrendsMetric
+      tags: [trends]
+      summary: Metric aggregated by day, week, or month over all history
+      parameters:
+        - name: metric
+          in: path
+          required: true
+          schema:
+            type: string
+            enum:
+              - resting_hr
+              - stress
+              - steps
+              - sleep_hours
+              - body_battery
+              - spo2
+              - training_readiness
+              - floors
+              - calories
+              - active_minutes
+              - respiration
+              - weight
+              - hrv
+              - hrv_weekly
+              - endurance_score
+              - hill_score
+              - race_5k
+              - race_10k
+        - name: period
+          in: query
+          schema: { type: string, enum: [daily, week, month], default: week }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TrendResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /api/sync:
+    description: Proxies to the MCP server's `/sync` using the `SYNC_URL` and `SYNC_TOKEN` Worker secrets.
+    get:
+      operationId: getApiSync
+      tags: [sync]
+      summary: Sync status (proxied)
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "501":
+          description: Secrets not configured on the Worker
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    post:
+      operationId: postApiSync
+      tags: [sync]
+      summary: Start a sync on the home host (proxied)
+      security: [{ bearer: [] }]
+      responses:
+        "202":
+          description: Started
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncStart" }
+        "409":
+          description: A sync is already running
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncStart" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "501":
+          description: Secrets not configured on the Worker
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  # -------------------------------------------------------------- MCP server
+  /sync:
+    servers:
+      - url: https://garmin.flatmeadow.com
+    get:
+      operationId: getSync
+      tags: [sync]
+      summary: Sync status
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncStatus" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: postSync
+      tags: [sync]
+      summary: Start sync_cron.sh in a separate process
+      description: |
+        Same script cron runs every 30 minutes: Garmin fetch, then three D1 pushes,
+        with Slack alerts on failure. Returns immediately. Refuses (409) while the
+        cron lock is held. Poll `GET /sync` or `GET /brief` for completion.
+      security: [{ bearer: [] }]
+      responses:
+        "202":
+          description: Started
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncStart" }
+        "409":
+          description: Busy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SyncStart" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /brief:
+    servers:
+      - url: https://garmin.flatmeadow.com
+    get:
+      operationId: getBrief
+      tags: [mcp]
+      summary: The morning brief (same payload as the garmin_brief MCP tool)
+      security: [{ bearer: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Brief" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /mcp:
+    servers:
+      - url: https://garmin.flatmeadow.com
+    post:
+      operationId: postMcp
+      tags: [mcp]
+      summary: Model Context Protocol endpoint (streamable HTTP, stateless)
+      description: |
+        JSON-RPC 2.0 per the MCP spec. Tools exposed: `garmin_brief`, `garmin_sync`,
+        `garmin_schema`, `garmin_query`, `garmin_health_summary`, `garmin_activities`,
+        `garmin_trends`. See `USAGE.md` for arguments. Not described further here
+        because the body is protocol-defined, not REST.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: JSON-RPC 2.0 request
+              additionalProperties: true
+      responses:
+        "200":
+          description: JSON-RPC response (JSON or text/event-stream)
+        "401": { $ref: "#/components/responses/Unauthorized" }
