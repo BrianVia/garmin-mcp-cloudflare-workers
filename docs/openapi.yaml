@@ -3,15 +3,11 @@ info:
   title: garmin-givemydata HTTP API
   version: 0.1.7
   description: |
-    Two HTTP surfaces share this spec.
+    One Cloudflare Worker (`web/src`) serves everything, reading from D1.
 
-    **Worker** (`https://garmin.brianvia.com`): the Cloudflare Worker in `web/src`
-    reading from D1. Every `/api/*` route is unauthenticated except `/api/sync`.
-
-    **MCP server** (`https://garmin.flatmeadow.com`): the FastMCP HTTP transport in
-    `garmin_mcp/server.py`, running on the sync host. Every route requires
-    `Authorization: Bearer <MCP_API_KEY>`. `/mcp` is the Model Context Protocol
-    endpoint (JSON-RPC over streamable HTTP); the other routes are plain JSON.
+    Every `/api/*` route is unauthenticated except `/api/sync`. `/mcp`, `/sync`, and
+    `/brief` require `Authorization: Bearer <MCP_BEARER>`. `/mcp` is the Model Context
+    Protocol endpoint (JSON-RPC over streamable HTTP); the other routes are plain JSON.
 
     Dates are `YYYY-MM-DD` in America/New_York. A `sleep.calendar_date` is the
     **wake** date. `sleep_time_seconds = null` means Garmin has not scored the night
@@ -21,9 +17,7 @@ security: []
 
 servers:
   - url: https://garmin.brianvia.com
-    description: Cloudflare Worker (D1-backed dashboard API)
-  - url: https://garmin.flatmeadow.com
-    description: MCP server on the sync host (bearer auth)
+    description: Cloudflare Worker (D1-backed API and MCP)
 
 tags:
   - name: meta
@@ -39,7 +33,7 @@ components:
     bearer:
       type: http
       scheme: bearer
-      description: The MCP server's `MCP_API_KEY`. The Worker's `/api/sync` uses the same value as its `SYNC_TOKEN` secret.
+      description: The Worker's `MCP_BEARER` secret. `/api/sync` also accepts the older `SYNC_TOKEN`.
 
   parameters:
     start:
@@ -147,7 +141,7 @@ components:
       properties:
         in_progress:
           type: boolean
-          description: True while `sync_cron.sh` holds `/tmp/garmin-sync.lock`.
+          description: True while the collector container is syncing.
         last_ok: { type: [string, "null"], format: date-time }
         last_attempt:
           type: [object, "null"]
@@ -162,7 +156,6 @@ components:
         - type: object
           properties:
             status: { type: string, enum: [started, busy] }
-            pid: { type: integer, description: Present when `status` is `started`. }
     Brief:
       description: The morning brief. Every key is always present; values are null when unknown. Nothing is averaged.
       type: object
@@ -735,11 +728,11 @@ paths:
         "400": { $ref: "#/components/responses/BadRequest" }
 
   /api/sync:
-    description: Proxies to the MCP server's `/sync` using the `SYNC_URL` and `SYNC_TOKEN` Worker secrets.
+    description: Same as `/sync`.
     get:
       operationId: getApiSync
       tags: [sync]
-      summary: Sync status (proxied)
+      summary: Sync status
       security: [{ bearer: [] }]
       responses:
         "200":
@@ -748,15 +741,10 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SyncStatus" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "501":
-          description: Secrets not configured on the Worker
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
     post:
       operationId: postApiSync
       tags: [sync]
-      summary: Start a sync on the home host (proxied)
+      summary: Start a sync
       security: [{ bearer: [] }]
       responses:
         "202":
@@ -770,16 +758,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/SyncStart" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "501":
-          description: Secrets not configured on the Worker
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
 
-  # -------------------------------------------------------------- MCP server
+  # --------------------------------------------------------- bearer routes
   /sync:
-    servers:
-      - url: https://garmin.flatmeadow.com
     get:
       operationId: getSync
       tags: [sync]
@@ -795,11 +776,13 @@ paths:
     post:
       operationId: postSync
       tags: [sync]
-      summary: Start sync_cron.sh in a separate process
+      summary: Start a Garmin sync in the collector container
       description: |
-        Same script cron runs every 30 minutes: Garmin fetch, then three D1 pushes,
-        with Slack alerts on failure. Returns immediately. Refuses (409) while the
-        cron lock is held. Poll `GET /sync` or `GET /brief` for completion.
+        The same sync the Worker cron runs at :15 and :45: Garmin fetch in a
+        Cloudflare Container, writes replayed on D1, Slack alerts on failure.
+        Returns immediately. Refuses (409) while a sync is running. Poll `GET /sync`
+        or `GET /brief` for completion. Optional `?date=YYYY-MM-DD` syncs that day
+        and the day before instead of today.
       security: [{ bearer: [] }]
       responses:
         "202":
@@ -814,9 +797,32 @@ paths:
               schema: { $ref: "#/components/schemas/SyncStart" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /sync/session:
+    put:
+      operationId: putSyncSession
+      tags: [sync]
+      summary: Replace the Garmin login cookies
+      description: |
+        Upload a `garmin_session.json` written by `garmin-givemydata` on any machine
+        that can log in to Garmin. Use it when syncs fail with "Login failed": Garmin
+        rate-limits fresh logins from Cloudflare, but accepts existing sessions.
+      security: [{ bearer: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [cookies, saved_at]
+              properties:
+                cookies: { type: array, items: { type: object } }
+                saved_at: { type: number, description: Unix seconds }
+      responses:
+        "200": { description: Stored }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /brief:
-    servers:
-      - url: https://garmin.flatmeadow.com
     get:
       operationId: getBrief
       tags: [mcp]
@@ -831,8 +837,6 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /mcp:
-    servers:
-      - url: https://garmin.flatmeadow.com
     post:
       operationId: postMcp
       tags: [mcp]

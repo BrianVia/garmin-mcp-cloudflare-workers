@@ -12,19 +12,22 @@
     "db:migrate:0005": "wrangler d1 execute garmin-health --remote --file=migrations/0005_sleep_scored_at.sql"
   },
   "dependencies": {
+    "@cloudflare/containers": "^0.3.7",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "hono": "^4.12.12",
-    "preact-iso": "^2.11.1"
+    "preact-iso": "^2.11.1",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260405.1",
+    "@cloudflare/workers-types": "^5.20260923.1",
     "@preact/preset-vite": "^2.9.0",
     "preact": "^10.25.0",
     "preact-router": "^4.1.2",
     "uplot": "^1.6.31",
     "vite": "^6.3.0",
-    "wrangler": "^4.81.0"
+    "wrangler": "^4.136.3"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^7.0.2"
   }
 }

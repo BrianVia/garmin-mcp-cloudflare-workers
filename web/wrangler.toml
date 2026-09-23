@@ -1,17 +1,43 @@
 name = "garmin-health"
 main = "src/server.ts"
-compatibility_date = "2025-04-01"
+compatibility_date = "2026-09-12"
 
 routes = [
   { pattern = "garmin.brianvia.com", custom_domain = true }
 ]
 
+[triggers]
+crons = ["15,45 * * * *"]
+
+[observability]
+enabled = true
+
 [[d1_databases]]
 binding = "DB"
-database_name = "garmin-health"
-database_id = "91ee2ecd-b717-4b14-a817-a39d5c89f9f7"
+database_name = "garmin-data"
+database_id = "cf87fd80-5c1f-4d55-b7eb-101708651628"
+# Rollback: the pre-migration copy fed by via-server is garmin-health / 91ee2ecd-b717-4b14-a817-a39d5c89f9f7.
 
 [assets]
 directory = "./client/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
+run_worker_first = ["/api/*", "/sync", "/sync/*", "/mcp", "/brief"]
+
+# Garmin collector: ../collector.py in a container, driven by the GarminCollector Durable Object.
+[[containers]]
+class_name = "GarminCollector"
+image = "../Dockerfile"
+image_build_context = ".."
+instance_type = "standard-1"
+max_instances = 1
+
+[[durable_objects.bindings]]
+name = "COLLECTOR"
+class_name = "GarminCollector"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["GarminCollector"]
+
+# Secrets: GARMIN_EMAIL, GARMIN_PASSWORD, MCP_BEARER, SYNC_TOKEN, SLACKPIPES_WEBHOOK

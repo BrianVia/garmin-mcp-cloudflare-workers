@@ -99,7 +99,7 @@ def _known_activity_detail_ids(conn) -> set[int]:
     return {int(row["activity_id"]) for row in rows if row["activity_id"] is not None}
 
 
-def incremental_sync(target_date: str = None) -> dict:
+def incremental_sync(target_date: str = None, known_activity_ids: set[int] = None, conn=None) -> dict:
     """Fetch today's data from Garmin and save directly to the database.
 
     Parameters
@@ -107,6 +107,8 @@ def incremental_sync(target_date: str = None) -> dict:
     target_date:
         ISO date string (``YYYY-MM-DD``) to treat as "today".  Defaults to
         the actual current date.
+    known_activity_ids, conn:
+        Overrides for the cloud collector, which syncs into a scratch database.
 
     Returns
     -------
@@ -128,9 +130,10 @@ def incremental_sync(target_date: str = None) -> dict:
         }
 
     # Open DB connection for direct writes
-    conn = get_connection()
+    conn = conn or get_connection()
     init_db(conn)
-    known_activity_ids = _known_activity_detail_ids(conn)
+    if known_activity_ids is None:
+        known_activity_ids = _known_activity_detail_ids(conn)
     logger.info("Found %d activities with existing detail data", len(known_activity_ids))
 
     counts = {}

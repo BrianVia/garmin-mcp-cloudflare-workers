@@ -4,7 +4,7 @@
 
 | Tool | Description |
 |---|---|
-| `garmin_sync(wait_seconds=0)` | Kick the cron sync out-of-process; returns `started`/`busy`, or waits when requested |
+| `garmin_sync(wait_seconds=0)` | Start the scheduled sync now; returns `started`/`busy`, or waits when requested |
 | `garmin_brief()` | Last night's sleep and today's non-averaged health, activity, load, weight, and freshness |
 | `garmin_schema()` | Show all tables, columns, and row counts |
 | `garmin_query(sql)` | Run a custom SELECT query against the database |
@@ -14,20 +14,54 @@
 
 ## Syncing Data
 
-Data syncs automatically every 30 minutes via cron. `garmin_sync()` starts that same
-`sync_cron.sh` in a separate process and returns immediately with `started` or
-`busy`. Pass `wait_seconds` to wait up to that many seconds for a final status.
+Everything runs on Cloudflare at `https://garmin.brianvia.com` (the `garmin-health`
+Worker in `web/`). A Worker cron syncs at :15 and :45. `garmin_sync()` starts that
+same sync and returns immediately with `started` or `busy`. Pass `wait_seconds` to
+wait up to that many seconds for a final status. A sync takes about 2 minutes.
 
 Example response:
 
 ```json
 {
   "status": "started",
-  "pid": 12345,
   "in_progress": true,
   "last_ok": "2026-04-07T12:00:00+00:00"
 }
 ```
+
+### How a sync works
+
+1. The `GarminCollector` Durable Object (`web/src/collector.ts`) starts a fresh
+   Cloudflare Container running `collector.py`, and sends it the saved Garmin cookies.
+2. `collector.py` runs the normal Python sync into a scratch SQLite file and records
+   every write it makes.
+3. The Durable Object replays those writes on D1 in one batch, then saves the
+   refreshed cookies and shuts the container down.
+4. Failures land in `sync_log` and post to Slack (SlackPipes), at most once an hour
+   per failure type.
+
+### When syncs fail with "Login failed"
+
+Garmin rate-limits fresh logins from Cloudflare (error 1015), but accepts an existing
+session. The session refreshes on every sync, so this should be rare. To fix it, log in
+on any home machine and upload the cookies:
+
+```bash
+garmin-givemydata --profile health --days 1   # writes garmin_session.json after login
+curl -X PUT https://garmin.brianvia.com/sync/session \
+  -H "Authorization: Bearer $MCP_BEARER" -H "Content-Type: application/json" \
+  --data @garmin_session.json
+curl -X POST https://garmin.brianvia.com/sync -H "Authorization: Bearer $MCP_BEARER"
+```
+
+### Deploying
+
+```bash
+cd web && bun install && bun run deploy   # needs Docker for the collector image
+```
+
+Secrets (`wrangler secret put`): `GARMIN_EMAIL`, `GARMIN_PASSWORD`, `MCP_BEARER`,
+`SYNC_TOKEN`, `SLACKPIPES_WEBHOOK`.
 
 ## Example Queries
 
@@ -58,11 +92,15 @@ garmin_trends(metric="steps", period="week")
 
 ## HTTP
 
-All routes use `Authorization: Bearer $MCP_API_KEY`:
+All routes use `Authorization: Bearer $MCP_BEARER`:
 
-- `POST /sync` starts the cron sync.
+- `POST /mcp` is the MCP endpoint.
+- `POST /sync` starts a sync (`?date=YYYY-MM-DD` to sync another day).
 - `GET /sync` returns sync status.
+- `PUT /sync/session` replaces the Garmin cookies.
 - `GET /brief` returns the morning brief.
+
+The public dashboard API (`/api/*`) is documented at `/docs`.
 
 ## Gotchas
 
