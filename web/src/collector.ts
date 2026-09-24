@@ -18,6 +18,11 @@ type CollectorResponse = {
   log: string;
 };
 
+async function readResponse(res: Response): Promise<CollectorResponse> {
+  if (!res.ok) throw new Error(`collector HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  return res.json<CollectorResponse>();
+}
+
 // ponytail: one collector instance; it's one Garmin account.
 export const collector = (env: Bindings) => env.COLLECTOR.getByName("main");
 
@@ -78,8 +83,6 @@ export class GarminCollector extends Container<Bindings> {
     try {
       await this.collect(targetDate);
     } finally {
-      // Stateless between runs: a fresh container per sync never inherits a stuck browser or an old image.
-      await this.destroy().catch(() => {});
       await this.ctx.storage.delete("sync_started");
       this.running = false;
     }
@@ -107,9 +110,12 @@ export class GarminCollector extends Container<Bindings> {
         }),
         signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
       });
-      if (!res.ok) throw new Error(`collector HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
-      response = await res.json<CollectorResponse>();
+      // 409: a sync this invocation lost track of (e.g. a retried alarm) is still running. Take its result
+      // rather than dropping it, since it holds the refreshed Garmin cookies.
+      response = res.status === 409 ? await this.awaitRunningSync() : await readResponse(res);
     } catch (error) {
+      // Hung or crashed browser: kill the container so the next run starts clean.
+      await this.destroy().catch(() => {});
       const message = error instanceof Error ? error.message : String(error);
       await db
         .prepare("INSERT INTO sync_log (sync_date, sync_type, records_upserted, status, error) VALUES (?, 'incremental_sync', 0, 'error', ?)")
@@ -131,6 +137,16 @@ export class GarminCollector extends Container<Bindings> {
       console.log(response.log);
       return this.alert("garmin_sync", response.error ?? "unknown error", response.log);
     }
+  }
+
+  private async awaitRunningSync(): Promise<CollectorResponse> {
+    const deadline = Date.now() + SYNC_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      const res = await this.containerFetch("http://collector/result");
+      if (res.status !== 409) return readResponse(res);
+    }
+    throw new Error("timed out waiting for the running collector sync");
   }
 
   /** Apply the collector's writes in one D1 batch (a transaction), retrying transient failures. */

@@ -5,6 +5,7 @@ returns every write it made, so the Worker can replay them on D1.
 
 POST /sync  {"session": {...}|null, "known_activity_ids": [...], "target_date": "YYYY-MM-DD"|null}
          -> {"status", "error", "session", "result", "statements": [[sql, params], ...], "log"}
+GET /result -> the last /sync response (409 while a sync is running, 404 before the first)
 
 The container keeps no state: the Worker owns the login session and the database.
 """
@@ -35,6 +36,9 @@ NUMBERED = re.compile(r"\?(\d+)")
 PLAIN_INSERT = re.compile(r"^\s*(INSERT (?:OR REPLACE )?INTO \w+\s*\([^)]*\))\s*VALUES\s*(\(.*\))\s*;?\s*$", re.DOTALL | re.IGNORECASE)
 MAX_STATEMENT_BYTES = 80_000  # D1 rejects statements over 100 KB
 busy = threading.Lock()
+# Kept so a caller that lost its /sync connection can still collect the result, including the
+# refreshed Garmin cookies: losing those forces a fresh login, which Garmin blocks from Cloudflare.
+last_response = None
 
 
 class RecordingConnection(sqlite3.Connection):
@@ -158,18 +162,26 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
-        self._reply(200, {"ok": True, "busy": busy.locked()})
+        if self.path != "/result":
+            return self._reply(200, {"ok": True, "busy": busy.locked()})
+        if busy.locked():
+            return self._reply(409, {"status": "busy"})
+        if last_response is None:
+            return self._reply(404, {"error": "no sync has run in this container"})
+        self._reply(200, last_response)
 
     def do_POST(self):
         if self.path != "/sync":
             return self._reply(404, {"error": "not found"})
         if not busy.acquire(blocking=False):
             return self._reply(409, {"status": "busy"})
+        global last_response
         try:
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-            self._reply(200, run_sync(body))
+            last_response = result = run_sync(body)
         finally:
             busy.release()
+        self._reply(200, result)
 
 
 if __name__ == "__main__":
