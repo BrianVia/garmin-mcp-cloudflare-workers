@@ -6,6 +6,7 @@ returns every write it made, so the Worker can replay them on D1.
 POST /sync  {"session": {...}|null, "known_activity_ids": [...], "target_date": "YYYY-MM-DD"|null}
          -> {"status", "error", "session", "result", "statements": [[sql, params], ...], "log"}
 GET /result -> the last /sync response (409 while a sync is running, 404 before the first)
+GET /session -> the Garmin cookies saved after login, readable mid-sync (404 if none)
 
 The container keeps no state: the Worker owns the login session and the database.
 """
@@ -162,6 +163,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_GET(self):
+        if self.path == "/session":
+            if not sync.SESSION_FILE.exists():
+                return self._reply(404, {"error": "no session saved yet"})
+            return self._reply(200, json.loads(sync.SESSION_FILE.read_text()))
         if self.path != "/result":
             return self._reply(200, {"ok": True, "busy": busy.locked()})
         if busy.locked():

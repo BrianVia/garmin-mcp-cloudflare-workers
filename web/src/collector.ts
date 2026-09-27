@@ -114,7 +114,9 @@ export class GarminCollector extends Container<Bindings> {
       // rather than dropping it, since it holds the refreshed Garmin cookies.
       response = res.status === 409 ? await this.awaitRunningSync() : await readResponse(res);
     } catch (error) {
-      // Hung or crashed browser: kill the container so the next run starts clean.
+      // Hung or crashed browser: keep the cookies it saved after logging in (Garmin may have rotated them,
+      // and a fresh login is blocked from Cloudflare), then kill the container so the next run starts clean.
+      await this.rescueSession();
       await this.destroy().catch(() => {});
       const message = error instanceof Error ? error.message : String(error);
       await db
@@ -136,6 +138,15 @@ export class GarminCollector extends Container<Bindings> {
     if (response.status !== "ok") {
       console.log(response.log);
       return this.alert("garmin_sync", response.error ?? "unknown error", response.log);
+    }
+  }
+
+  private async rescueSession() {
+    try {
+      const res = await this.containerFetch("http://collector/session", { signal: AbortSignal.timeout(10_000) });
+      if (res.ok) await this.ctx.storage.put("garmin_session", await res.json());
+    } catch (error) {
+      console.warn("could not rescue Garmin session", error);
     }
   }
 
@@ -174,7 +185,8 @@ export class GarminCollector extends Container<Bindings> {
     const last = await this.ctx.storage.get<number>(key);
     if (!this.env.SLACKPIPES_WEBHOOK || (last && Date.now() - last < ALERT_COOLDOWN_MS)) return;
     const tail = log.trim().split("\n").slice(-15).join("\n");
-    const text = `:rotating_light: garmin-sync failed on Cloudflare\n*mode:* ${mode}\n*detail:* ${detail}\n\`\`\`\n${tail || "(no log)"}\n\`\`\``;
+    const hint = detail === "Login failed" ? "\n*fix:* upload fresh cookies from a home machine (USAGE.md, \"When syncs fail with Login failed\")" : "";
+    const text = `:rotating_light: garmin-sync failed on Cloudflare\n*mode:* ${mode}\n*detail:* ${detail}${hint}\n\`\`\`\n${tail || "(no log)"}\n\`\`\``;
     const res = await fetch(this.env.SLACKPIPES_WEBHOOK, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
