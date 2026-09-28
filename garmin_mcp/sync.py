@@ -9,6 +9,7 @@ import fcntl
 import logging
 import os
 import subprocess
+import sys
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -73,7 +74,7 @@ def start_sync() -> dict:
     if sync_in_progress():
         return {"status": "busy", **sync_status()}
     process = subprocess.Popen(
-        [str(PROJECT_DIR / "sync_cron.sh")],
+        [sys.executable, "-m", "garmin_mcp.sync"],
         cwd=PROJECT_DIR,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -204,12 +205,15 @@ def incremental_sync(target_date: str = None, known_activity_ids: set[int] = Non
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import sys
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
     arg_date = sys.argv[1] if len(sys.argv) > 1 else None
-    result = incremental_sync(target_date=arg_date)
+    with LOCK_FILE.open("a+") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            sys.exit("Another Garmin sync is already running")
+        result = incremental_sync(target_date=arg_date)
     print(result)

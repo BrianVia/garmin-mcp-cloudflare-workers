@@ -432,7 +432,7 @@ def garmin_trends(metric: str, period: str = "month") -> str:
 
 @mcp.tool()
 async def garmin_sync(wait_seconds: int = 0) -> str:
-    """Kicks the same sync_cron.sh the cron uses, in a separate process.
+    """Runs an incremental sync into the local garmin.db, in a separate process.
 
     Returns immediately (status started/busy) unless wait_seconds > 0.
     Refuses to start a second sync while one is running.
