@@ -37,8 +37,9 @@ Example response:
    every write it makes.
 3. The Durable Object replays those writes on D1 in one batch, then saves the
    refreshed cookies and shuts the container down.
-4. Failures land in `sync_log` and post to Slack (SlackPipes), at most once an hour
-   per failure type.
+4. Failures land in `sync_log`. Two failed syncs in a row post to Slack (SlackPipes),
+   at most once an hour per failure type; a single failure usually fixes itself on the
+   next run.
 
 ### When syncs fail with "Login failed"
 

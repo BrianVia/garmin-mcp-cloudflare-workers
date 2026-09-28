@@ -141,6 +141,17 @@ export class GarminCollector extends Container<Bindings> {
     }
   }
 
+  private async failedTwiceInARow(): Promise<boolean> {
+    try {
+      const { results } = await this.env.DB
+        .prepare("SELECT status FROM sync_log ORDER BY sync_date DESC, id DESC LIMIT 2")
+        .all<{ status: string }>();
+      return results.length === 2 && results.every((row) => row.status !== "ok");
+    } catch {
+      return true;
+    }
+  }
+
   private async rescueSession() {
     try {
       const res = await this.containerFetch("http://collector/session", { signal: AbortSignal.timeout(10_000) });
@@ -178,9 +189,11 @@ export class GarminCollector extends Container<Bindings> {
     }
   }
 
-  /** Slack alert via SlackPipes, at most once an hour per failure mode. */
+  /** Slack alert via SlackPipes after two failed syncs in a row, at most once an hour per failure mode. */
   private async alert(mode: string, detail: string, log: string) {
     console.error(`garmin sync failed (${mode}): ${detail}`);
+    // A one-off hang fixes itself on the next run. d1_write writes no sync_log row, so it always alerts.
+    if (mode !== "d1_write" && !(await this.failedTwiceInARow())) return;
     const key = `alert_sent:${mode}`;
     const last = await this.ctx.storage.get<number>(key);
     if (!this.env.SLACKPIPES_WEBHOOK || (last && Date.now() - last < ALERT_COOLDOWN_MS)) return;
