@@ -10,7 +10,7 @@ if [ -n "$TS_AUTHKEY" ]; then
   (
     for _ in 1 2 3 4 5; do
       tailscale up --authkey="$TS_AUTHKEY" --hostname=garmin-collector \
-        --advertise-tags=tag:garmin-collector --exit-node=via-server && break
+        --advertise-tags=tag:garmin-collector --exit-node=100.125.200.106 && break  # via-server
       sleep 2
     done
   ) &
