@@ -43,9 +43,21 @@ Example response:
 
 ### When syncs fail with "Login failed"
 
-Garmin rate-limits fresh logins from Cloudflare (error 1015), but accepts an existing
-session. The session refreshes on every sync, so this should be rare. To fix it, log in
-on any home machine and upload the cookies:
+Garmin blocks fresh logins from Cloudflare (errors 427, 1015), but accepts an existing
+session. Garmin still ends sessions every week or two, so the collector logs in through
+via-server's home connection: it joins the tailnet with the `TS_AUTHKEY` secret and uses
+via-server as a Tailscale exit node (`entrypoint.sh`). If Tailscale or via-server is down,
+it connects directly, which works only while the saved cookies last.
+
+Tailscale setup (once):
+1. Access controls: add `"tag:garmin-collector": ["autogroup:admin"]` to `tagOwners`.
+2. Machines → via-server → Edit route settings → enable "Use as exit node".
+3. Settings → OAuth clients → new client with **Auth Keys: write** and tag `tag:garmin-collector`.
+4. `cd web && npx wrangler secret put TS_AUTHKEY`, value
+   `tskey-client-...?ephemeral=true&preauthorized=true`. OAuth client secrets don't expire.
+
+If via-server is out for a while and the cookies expire, log in on any home machine and
+upload the cookies (`SYNC_TOKEN` works in place of `MCP_BEARER`):
 
 ```bash
 garmin-givemydata --profile health --days 1   # writes garmin_session.json after login
@@ -62,7 +74,9 @@ cd web && bun install && bun run deploy   # needs Docker for the collector image
 ```
 
 Secrets (`wrangler secret put`): `GARMIN_EMAIL`, `GARMIN_PASSWORD`, `MCP_BEARER`,
-`SYNC_TOKEN`, `SLACKPIPES_WEBHOOK`.
+`SYNC_TOKEN`, `SLACKPIPES_WEBHOOK`, `TS_AUTHKEY`.
+
+Deploy with `sg docker -c "bun run deploy"` if your shell predates joining the docker group.
 
 ## Example Queries
 

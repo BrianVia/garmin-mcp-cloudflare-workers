@@ -52,7 +52,7 @@ export class GarminCollector extends Container<Bindings> {
 
   constructor(ctx: DurableObjectState<Bindings>, env: Bindings) {
     super(ctx, env);
-    this.envVars = { GARMIN_EMAIL: env.GARMIN_EMAIL, GARMIN_PASSWORD: env.GARMIN_PASSWORD };
+    this.envVars = { GARMIN_EMAIL: env.GARMIN_EMAIL, GARMIN_PASSWORD: env.GARMIN_PASSWORD, TS_AUTHKEY: env.TS_AUTHKEY ?? "" };
   }
 
   async inProgress(): Promise<boolean> {

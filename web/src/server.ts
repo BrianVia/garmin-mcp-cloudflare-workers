@@ -20,6 +20,8 @@ export type Bindings = {
   MCP_BEARER: string;
   SYNC_TOKEN?: string;
   SLACKPIPES_WEBHOOK?: string;
+  /** Tailscale OAuth client secret; routes the collector through via-server (entrypoint.sh). */
+  TS_AUTHKEY?: string;
 };
 export type Env = { Bindings: Bindings };
 

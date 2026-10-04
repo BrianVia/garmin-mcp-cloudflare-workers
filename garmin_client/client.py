@@ -29,6 +29,30 @@ from .endpoints import (
 
 log = logging.getLogger(__name__)
 
+
+def _home_proxy() -> dict:
+    """Route the browser through via-server's Tailscale exit node when the container has one (see entrypoint.sh).
+
+    Garmin blocks logins from Cloudflare's IPs but accepts them from home. Falls back to a direct
+    connection when Tailscale or via-server is down, so syncs with saved cookies still work.
+    """
+    if not os.environ.get("TS_AUTHKEY"):
+        return {}
+    import subprocess
+
+    deadline = time.time() + 30
+    while time.time() < deadline:
+        try:
+            out = subprocess.run(["tailscale", "status", "--json"], capture_output=True, timeout=5).stdout
+            if (json.loads(out).get("ExitNodeStatus") or {}).get("Online"):
+                log.info("Routing the browser through the Tailscale exit node")
+                return {"proxy": {"server": "socks5://localhost:1055"}}
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+        time.sleep(2)
+    log.warning("Tailscale exit node is not online; connecting directly")
+    return {}
+
 DEFAULT_PROFILE_DIR = Path.home() / ".garmin-client" / "browser_profile"
 DEFAULT_EVALUATE_TIMEOUT_SEC = 45
 DEFAULT_FETCH_TIMEOUT_MS = 30000
@@ -100,7 +124,7 @@ class _CamoufoxEngine:
         """Launch Camoufox. Returns (context, page, None, browser)."""
         from camoufox.sync_api import Camoufox
 
-        browser = Camoufox(headless=headless).__enter__()
+        browser = Camoufox(headless=headless, **_home_proxy()).__enter__()
         try:
             page = browser.new_page()
         except Exception:

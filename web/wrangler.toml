@@ -40,4 +40,4 @@ class_name = "GarminCollector"
 tag = "v1"
 new_sqlite_classes = ["GarminCollector"]
 
-# Secrets: GARMIN_EMAIL, GARMIN_PASSWORD, MCP_BEARER, SYNC_TOKEN, SLACKPIPES_WEBHOOK
+# Secrets: GARMIN_EMAIL, GARMIN_PASSWORD, MCP_BEARER, SYNC_TOKEN, SLACKPIPES_WEBHOOK, TS_AUTHKEY
