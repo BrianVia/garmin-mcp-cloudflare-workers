@@ -98,6 +98,9 @@ export class GarminCollector extends Container<Bindings> {
       .all<{ activity_id: number }>();
 
     let response: CollectorResponse;
+    // Garmin rotates the cookies when the collector logs in. Keep the newest copy as soon as it's saved:
+    // a sync that then hangs can leave the container too stuck to hand them over at the end.
+    const keepSession = setInterval(() => void this.rescueSession(), 30_000);
     try {
       await this.startAndWaitForPorts();
       const res = await this.containerFetch("http://collector/sync", {
@@ -125,6 +128,8 @@ export class GarminCollector extends Container<Bindings> {
         .run()
         .catch(() => {});
       return this.alert("collector", message, "");
+    } finally {
+      clearInterval(keepSession);
     }
 
     if (response.session) await this.ctx.storage.put("garmin_session", response.session);
@@ -155,7 +160,10 @@ export class GarminCollector extends Container<Bindings> {
   private async rescueSession() {
     try {
       const res = await this.containerFetch("http://collector/session", { signal: AbortSignal.timeout(10_000) });
-      if (res.ok) await this.ctx.storage.put("garmin_session", await res.json());
+      if (!res.ok) return;
+      const session = await res.json<{ saved_at: number }>();
+      const kept = await this.ctx.storage.get<{ saved_at: number }>("garmin_session");
+      if (!kept || session.saved_at > kept.saved_at) await this.ctx.storage.put("garmin_session", session);
     } catch (error) {
       console.warn("could not rescue Garmin session", error);
     }
