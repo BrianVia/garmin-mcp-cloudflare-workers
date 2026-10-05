@@ -43,7 +43,7 @@ Example response:
 
 ### When syncs fail with "Login failed"
 
-Garmin blocks fresh logins from Cloudflare (errors 427, 1015), but accepts an existing
+Garmin blocks fresh logins from Cloudflare and from newer Camoufox builds (errors 427, 1015), but accepts an existing
 session. Garmin still ends sessions every week or two, so the collector logs in through
 via-server's home connection: it joins the tailnet with the `TS_AUTHKEY` secret and uses
 via-server as a Tailscale exit node (`entrypoint.sh`). If Tailscale or via-server is down,
