@@ -45,6 +45,9 @@ app.all("/mcp", async (c) => {
   return transport.handleRequest(c.req.raw);
 });
 
+// A misconfigured MCP URL (/mcp/, /mcp/sse) must fail loudly, not get the SPA's 200 page.
+app.all("/mcp/*", (c) => c.json({ error: "Not found. The MCP endpoint is /mcp" }, 404));
+
 app.get("/brief", async (c) => {
   if (!(await authorized(c.req.header("Authorization"), c.env.MCP_BEARER))) return c.json({ error: "Unauthorized" }, 401);
   return c.json(await buildBrief(c.env.DB, await collector(c.env).inProgress()));

@@ -22,7 +22,7 @@ database_id = "cf87fd80-5c1f-4d55-b7eb-101708651628"
 directory = "./client/dist"
 binding = "ASSETS"
 not_found_handling = "single-page-application"
-run_worker_first = ["/api/*", "/sync", "/sync/*", "/mcp", "/brief"]
+run_worker_first = ["/api/*", "/sync", "/sync/*", "/mcp", "/mcp/*", "/brief"]
 
 # Garmin collector: ../collector.py in a container, driven by the GarminCollector Durable Object.
 [[containers]]
