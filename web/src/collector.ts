@@ -138,7 +138,14 @@ export class GarminCollector extends Container<Bindings> {
     try {
       await this.replay(response.statements);
     } catch (error) {
-      return this.alert("d1_write", error instanceof Error ? error.message : String(error), response.log);
+      const message = error instanceof Error ? error.message : String(error);
+      // The batch held this sync's sync_log row; log the failure so a one-off D1 overload waits for a repeat.
+      await db
+        .prepare("INSERT INTO sync_log (sync_date, sync_type, records_upserted, status, error) VALUES (?, 'incremental_sync', 0, 'error', ?)")
+        .bind(new Date().toISOString(), message.slice(0, 500))
+        .run()
+        .catch(() => {});
+      return this.alert("d1_write", message, response.log);
     }
     if (response.status !== "ok") {
       console.log(response.log);
@@ -200,8 +207,8 @@ export class GarminCollector extends Container<Bindings> {
   /** Slack alert via SlackPipes after two failed syncs in a row, at most once an hour per failure mode. */
   private async alert(mode: string, detail: string, log: string) {
     console.error(`garmin sync failed (${mode}): ${detail}`);
-    // A one-off hang fixes itself on the next run. d1_write writes no sync_log row, so it always alerts.
-    if (mode !== "d1_write" && !(await this.failedTwiceInARow())) return;
+    // A one-off hang or D1 overload fixes itself on the next run.
+    if (!(await this.failedTwiceInARow())) return;
     const key = `alert_sent:${mode}`;
     const last = await this.ctx.storage.get<number>(key);
     if (!this.env.SLACKPIPES_WEBHOOK || (last && Date.now() - last < ALERT_COOLDOWN_MS)) return;
