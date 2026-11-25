@@ -141,7 +141,7 @@ components:
       properties:
         in_progress:
           type: boolean
-          description: True while the collector container is syncing.
+          description: True while a sync is running.
         last_ok: { type: [string, "null"], format: date-time }
         last_attempt:
           type: [object, "null"]
@@ -149,7 +149,18 @@ components:
             at: { type: string, format: date-time }
             status: { type: string, enum: [ok, error] }
             records_upserted: { type: integer }
-            error: { type: [string, "null"] }
+            error:
+              type: [string, "null"]
+              description: On a failure, starts with its type (session_expired, home_down, blocked, garmin, d1_write). An ok sync lists any endpoints it had to skip.
+        stale: { type: boolean, description: True when the last successful sync is over two hours old. }
+        warning: { type: [string, "null"], description: Says in words that the data is stale. }
+        login:
+          type: object
+          properties:
+            needed: { type: boolean, description: True when via-server should log in to Garmin. }
+            reason: { type: [string, "null"] }
+            last_login: { type: [string, "null"], format: date-time }
+            session_expires_at: { type: [string, "null"], format: date-time }
     SyncStart:
       allOf:
         - $ref: "#/components/schemas/SyncStatus"
@@ -163,9 +174,14 @@ components:
         date: { $ref: "#/components/schemas/Date" }
         generated_at: { type: string, format: date-time }
         timezone: { type: string, examples: [America/New_York] }
+        warning: { type: [string, "null"], description: Set when the last successful sync is over two hours old. }
         freshness:
           type: object
           properties:
+            stale: { type: boolean }
+            last_login: { type: [string, "null"], format: date-time }
+            session_expires_at: { type: [string, "null"], format: date-time }
+            login_needed: { type: boolean }
             last_sync_ok: { type: [string, "null"], format: date-time }
             last_sync_attempt:
               type: [object, "null"]
@@ -776,10 +792,10 @@ paths:
     post:
       operationId: postSync
       tags: [sync]
-      summary: Start a Garmin sync in the collector container
+      summary: Start a Garmin sync
       description: |
-        The same sync the Worker cron runs at :15 and :45: Garmin fetch in a
-        Cloudflare Container, writes replayed on D1, Slack alerts on failure.
+        The same sync the Worker cron runs at :15 and :45: Garmin REST through
+        via-server's home IP, written to D1, Slack alerts on failure.
         Returns immediately. Refuses (409) while a sync is running. Poll `GET /sync`
         or `GET /brief` for completion. Optional `?date=YYYY-MM-DD` syncs that day
         and the day before instead of today.
@@ -803,9 +819,9 @@ paths:
       tags: [sync]
       summary: Replace the Garmin login cookies
       description: |
-        Upload a `garmin_session.json` written by `garmin-givemydata` on any machine
-        that can log in to Garmin. Use it when syncs fail with "Login failed": Garmin
-        rate-limits fresh logins from Cloudflare, but accepts existing sessions.
+        Upload a `garmin_session.json` from a machine that logged in to Garmin.
+        via-server's `home/login.py` does this. Only cookies for `connect.garmin.com`
+        are kept, encrypted.
       security: [{ bearer: [] }]
       requestBody:
         required: true

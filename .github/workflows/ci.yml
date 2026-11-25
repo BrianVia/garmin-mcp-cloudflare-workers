@@ -21,6 +21,16 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
 
+  worker:
+    name: Worker & home scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - run: bun install --frozen-lockfile && bun test
+        working-directory: web
+      - run: python3 -m unittest tests.test_home
+
   build:
     name: Build & verify package
     runs-on: ubuntu-latest

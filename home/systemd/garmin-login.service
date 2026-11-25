@@ -1,0 +1,10 @@
+[Unit]
+Description=Garmin browser login, when the garmin-health Worker needs one
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/garmin-home.env
+# The browser's timezone must match the home IP.
+Environment=TZ=America/New_York
+ExecStart=%h/Development/Personal/garmin-givemydata/.venv/bin/python %h/Development/Personal/garmin-givemydata/home/login.py
+TimeoutStartSec=300

@@ -1,10 +1,13 @@
 import { Hono } from "hono";
-import { collector } from "../collector";
+import { z } from "zod";
 import { authorized } from "../auth";
+import { connectCookies } from "../garmin/client";
+import { saveLogin } from "../state";
+import { startSync, syncStatus } from "../sync";
 import type { Env } from "../server";
 
-// POST starts a sync (202 started, 409 busy); GET returns sync status.
-// Accepts the MCP bearer or the older SYNC_TOKEN.
+// POST starts a sync (202 started, 409 busy); GET returns sync and login status.
+// Accepts the MCP bearer or SYNC_TOKEN (the one via-server holds).
 export const syncRoutes = new Hono<Env>();
 
 syncRoutes.use(async (c, next) => {
@@ -16,18 +19,26 @@ syncRoutes.use(async (c, next) => {
 });
 
 syncRoutes.post("/", async (c) => {
-  const result = await collector(c.env).startSync(c.req.query("date") ?? null);
+  const date = c.req.query("date") ?? null;
+  // The date is put into Garmin URLs and GraphQL queries.
+  if (date !== null && !z.iso.date().safeParse(date).success) return c.json({ error: "date must be YYYY-MM-DD" }, 400);
+  const result = await startSync(c.env, (sync) => c.executionCtx.waitUntil(sync), date);
   return c.json(result, result.status === "started" ? 202 : 409);
 });
 
-syncRoutes.get("/", async (c) => c.json(await collector(c.env).status()));
+syncRoutes.get("/", async (c) => c.json(await syncStatus(c.env.DB)));
 
-// Upload a garmin_session.json (Camoufox cookies) when Garmin won't accept a fresh login from Cloudflare.
+const sessionSchema = z.object({
+  cookies: z.array(z.object({ name: z.string(), value: z.string(), domain: z.string(), expires: z.number().optional() })).max(200),
+  saved_at: z.number(),
+});
+
+// Upload a garmin_session.json (browser cookies) after logging in to Garmin; home/login.py does this.
 syncRoutes.put("/session", async (c) => {
-  const session = await c.req.json<{ cookies?: unknown[]; saved_at?: number }>();
-  if (!Array.isArray(session.cookies) || typeof session.saved_at !== "number") {
-    return c.json({ error: "expected garmin_session.json: {cookies: [...], saved_at: <unix seconds>}" }, 400);
-  }
-  await collector(c.env).setSession({ cookies: session.cookies, saved_at: session.saved_at });
-  return c.json({ ok: true, cookies: session.cookies.length });
+  const parsed = sessionSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "expected garmin_session.json: {cookies: [...], saved_at: <unix seconds>}" }, 400);
+  const kept = connectCookies(parsed.data.cookies);
+  if (!kept.some((cookie) => cookie.name === "session")) return c.json({ error: "no connect.garmin.com session cookie; log in first" }, 400);
+  await saveLogin(c.env, parsed.data);
+  return c.json({ ok: true, cookies: kept.length });
 });

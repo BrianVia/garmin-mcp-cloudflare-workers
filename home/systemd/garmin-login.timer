@@ -1,0 +1,10 @@
+[Unit]
+Description=Check every 30 minutes whether the garmin-health Worker needs a Garmin login
+
+[Timer]
+# Ten minutes before the Worker's :15 and :45 syncs.
+OnCalendar=*:05,35
+Persistent=true
+
+[Install]
+WantedBy=timers.target
