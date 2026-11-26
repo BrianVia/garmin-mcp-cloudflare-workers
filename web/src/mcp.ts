@@ -2,8 +2,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { addDays, buildBrief, localToday } from "./brief";
-import { collector } from "./collector";
 import type { Bindings } from "./server";
+import { startSync, syncStatus } from "./sync";
 
 type Row = Record<string, unknown>;
 
@@ -33,7 +33,7 @@ const TREND_METRICS: Record<string, { table: string; expr: string; notNull: stri
 
 const BLOCKED = ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE", "ATTACH", "DETACH", "PRAGMA"];
 
-export function createMcpServer(env: Bindings): McpServer {
+export function createMcpServer(env: Bindings, ctx: { waitUntil(promise: Promise<unknown>): void }): McpServer {
   const db = env.DB;
   const server = new McpServer({ name: "garmin", version: "1.0.0" });
 
@@ -222,19 +222,18 @@ period: 'week' or 'month'.`,
 
   server.tool(
     "garmin_sync",
-    `Starts the same Garmin sync the 30-minute schedule runs, in a Cloudflare container.
+    `Starts the same Garmin sync the 30-minute schedule runs. A sync takes about 10 seconds.
 
 Returns immediately (status started/busy) unless wait_seconds > 0.
 Refuses to start a second sync while one is running.`,
     { wait_seconds: z.number().int().default(0) },
     async ({ wait_seconds }) => {
       try {
-        const stub = collector(env);
-        let result: object = await stub.startSync();
+        let result: object = await startSync(env, (sync) => ctx.waitUntil(sync));
         const deadline = Date.now() + wait_seconds * 1000;
         while (wait_seconds > 0 && Date.now() < deadline) {
-          await new Promise((resolve) => setTimeout(resolve, Math.min(5000, deadline - Date.now())));
-          const status = await stub.status();
+          await new Promise((resolve) => setTimeout(resolve, Math.min(2000, deadline - Date.now())));
+          const status = await syncStatus(db);
           result = status;
           if (!status.in_progress) break;
         }
@@ -252,9 +251,10 @@ Refuses to start a second sync while one is running.`,
 Last night's sleep (wake date = today), sleep_pending flag, naps kept
 separate, HRV last night vs baseline, readiness factors, today's steps,
 last activity with weather, 14-day load, strength sets this week, weight
-staleness, and data freshness. Never averaged.`,
+staleness, and data freshness. Never averaged. If warning is set the data
+is over two hours old: say so before quoting any number.`,
     {},
-    async () => text(await buildBrief(db, await collector(env).inProgress())),
+    async () => text(await buildBrief(db, await syncStatus(db))),
   );
 
   return server;

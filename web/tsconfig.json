@@ -16,5 +16,6 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedIndexedAccess": true,
     "types": ["@cloudflare/workers-types"]
-  }
+  },
+  "exclude": ["node_modules", "test"]
 }

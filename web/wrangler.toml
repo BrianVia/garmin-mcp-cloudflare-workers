@@ -24,20 +24,19 @@ binding = "ASSETS"
 not_found_handling = "single-page-application"
 run_worker_first = ["/api/*", "/sync", "/sync/*", "/mcp", "/mcp/*", "/brief"]
 
-# Garmin collector: ../collector.py in a container, driven by the GarminCollector Durable Object.
-[[containers]]
-class_name = "GarminCollector"
-image = "../Dockerfile"
-image_build_context = ".."
-instance_type = "standard-1"
-max_instances = 3  # headroom: a container that is still shutting down must not block the next sync
+# Garmin is read over REST through home/proxy.py on via-server, so requests leave from the home IP. See USAGE.md.
+[vars]
+GARMIN_PROXY_URL = "http://garmin-home"
 
-[[durable_objects.bindings]]
-name = "COLLECTOR"
-class_name = "GarminCollector"
+# The private route to it: a Workers VPC service on via-server's Cloudflare Tunnel, with no public hostname.
+# Replace the id with the one `wrangler vpc service create` prints.
+[[vpc_services]]
+binding = "GARMIN_HOME"
+service_id = "01a21925-655b-7492-9d18-2b11f808dccb"
 
+# GarminCollector (the retired container host) is still exported but has no binding; see src/server.ts.
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["GarminCollector"]
 
-# Secrets: GARMIN_EMAIL, GARMIN_PASSWORD, MCP_BEARER, SYNC_TOKEN, SLACKPIPES_WEBHOOK, TS_AUTHKEY
+# Secrets: MCP_BEARER, SYNC_TOKEN, SLACKPIPES_WEBHOOK, GARMIN_PROXY_TOKEN, SESSION_KEY

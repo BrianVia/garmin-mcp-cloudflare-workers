@@ -1,4 +1,6 @@
 // Port of garmin_mcp/db.py build_brief: the local-day morning brief from stored data only.
+import type { SyncStatus } from "./sync";
+
 type Row = Record<string, any>;
 
 export const TIMEZONE = "America/New_York";
@@ -27,7 +29,7 @@ export function localNowIso(now = new Date()): string {
 const pick = (row: Row, keys: string[]) => Object.fromEntries(keys.map((key) => [key, row[key]]));
 const omit = (row: Row, keys: string[]) => Object.fromEntries(Object.entries(row).filter(([key]) => !keys.includes(key)));
 
-export async function buildBrief(db: D1Database, syncInProgress: boolean) {
+export async function buildBrief(db: D1Database, sync: SyncStatus) {
   const dateText = localToday();
   const windowStart = addDays(dateText, -13);
   const weekStart = addDays(dateText, -((new Date(`${dateText}T00:00:00Z`).getUTCDay() + 6) % 7));
@@ -35,11 +37,6 @@ export async function buildBrief(db: D1Database, syncInProgress: boolean) {
   const [freshnessRes, sleepRes, hrvRes, readinessRes, dailyRes, activityRes, loadRes, weightRes] = await db.batch<Row>([
     db.prepare(
       `SELECT
-         (SELECT sync_date FROM sync_log WHERE status = 'ok'
-          ORDER BY sync_date DESC, id DESC LIMIT 1) AS last_sync_ok,
-         (SELECT sync_date FROM sync_log ORDER BY sync_date DESC, id DESC LIMIT 1) AS attempt_at,
-         (SELECT status FROM sync_log ORDER BY sync_date DESC, id DESC LIMIT 1) AS attempt_status,
-         (SELECT error FROM sync_log ORDER BY sync_date DESC, id DESC LIMIT 1) AS attempt_error,
          COALESCE(
            (SELECT last_sync FROM device WHERE last_sync IS NOT NULL ORDER BY last_sync DESC LIMIT 1),
            (SELECT json_extract(raw_json, '$') FROM user_profile WHERE key = 'sync_timestamp')
@@ -123,10 +120,6 @@ export async function buildBrief(db: D1Database, syncInProgress: boolean) {
   const first = (res: D1Result<Row> | undefined): Row | null => res?.results[0] ?? null;
 
   const freshness = first(freshnessRes)!;
-  const lastAttempt =
-    freshness.attempt_at !== null || freshness.attempt_status !== null
-      ? { at: freshness.attempt_at, status: freshness.attempt_status, error: freshness.attempt_error }
-      : null;
 
   const sleepRow = first(sleepRes);
   const sleep = {
@@ -161,10 +154,15 @@ export async function buildBrief(db: D1Database, syncInProgress: boolean) {
     date: dateText,
     generated_at: localNowIso(),
     timezone: TIMEZONE,
+    warning: sync.warning,
     freshness: {
-      last_sync_ok: freshness.last_sync_ok,
-      last_sync_attempt: lastAttempt,
-      sync_in_progress: syncInProgress,
+      stale: sync.stale,
+      last_sync_ok: sync.last_ok,
+      last_sync_attempt: sync.last_attempt && pick(sync.last_attempt, ["at", "status", "error"]),
+      sync_in_progress: sync.in_progress,
+      last_login: sync.login.last_login,
+      session_expires_at: sync.login.session_expires_at,
+      login_needed: sync.login.needed,
       garmin_last_reported: freshness.garmin_last_reported,
       sleep_scored_at: sleepRow?.scored_at ?? null,
     },

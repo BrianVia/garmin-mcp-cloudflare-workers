@@ -6,22 +6,24 @@ import { trendRoutes } from "./routes/trends";
 import { metaRoutes } from "./routes/meta";
 import { syncRoutes } from "./routes/sync";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { GarminCollector, collector } from "./collector";
+import { DurableObject } from "cloudflare:workers";
 import { authorized } from "./auth";
 import { buildBrief } from "./brief";
 import { createMcpServer } from "./mcp";
+import { scheduledSync, syncStatus } from "./sync";
 
 export type Bindings = {
   DB: D1Database;
   ASSETS: Fetcher;
-  COLLECTOR: DurableObjectNamespace<GarminCollector>;
-  GARMIN_EMAIL: string;
-  GARMIN_PASSWORD: string;
+  /** Workers VPC service for home/proxy.py on via-server. Unset in local dev. */
+  GARMIN_HOME?: Fetcher;
+  GARMIN_PROXY_URL: string;
+  GARMIN_PROXY_TOKEN?: string;
+  /** Encrypts the Garmin cookies in D1. */
+  SESSION_KEY?: string;
   MCP_BEARER: string;
   SYNC_TOKEN?: string;
   SLACKPIPES_WEBHOOK?: string;
-  /** Tailscale OAuth client secret; routes the collector through via-server (entrypoint.sh). */
-  TS_AUTHKEY?: string;
 };
 export type Env = { Bindings: Bindings };
 
@@ -41,7 +43,7 @@ app.route("/sync", syncRoutes);
 app.all("/mcp", async (c) => {
   if (!(await authorized(c.req.header("Authorization"), c.env.MCP_BEARER))) return c.json({ error: "Unauthorized" }, 401);
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined });
-  await createMcpServer(c.env).connect(transport);
+  await createMcpServer(c.env, c.executionCtx).connect(transport);
   return transport.handleRequest(c.req.raw);
 });
 
@@ -50,7 +52,7 @@ app.all("/mcp/*", (c) => c.json({ error: "Not found. The MCP endpoint is /mcp" }
 
 app.get("/brief", async (c) => {
   if (!(await authorized(c.req.header("Authorization"), c.env.MCP_BEARER))) return c.json({ error: "Unauthorized" }, 401);
-  return c.json(await buildBrief(c.env.DB, await collector(c.env).inProgress()));
+  return c.json(await buildBrief(c.env.DB, await syncStatus(c.env.DB)));
 });
 
 // Fallback to static assets for non-API routes
@@ -58,11 +60,17 @@ app.all("*", async (c) => {
   return c.env.ASSETS.fetch(c.req.raw);
 });
 
-export { GarminCollector };
+/** Retired container host: no binding, no container, starts nothing. Deleting the class needs a migration that
+ *  can't be rolled back, so it goes in a later deploy (USAGE.md, "Teardown"). */
+export class GarminCollector extends DurableObject {
+  async alarm() {
+    await this.ctx.storage.deleteAlarm();
+  }
+}
+
 export default {
   fetch: app.fetch,
   async scheduled(_controller: ScheduledController, env: Bindings) {
-    const result = await collector(env).startSync();
-    console.log(`scheduled sync: ${result.status}`);
+    await scheduledSync(env);
   },
 } satisfies ExportedHandler<Bindings>;

@@ -1,0 +1,13 @@
+[Unit]
+Description=Garmin forward proxy for the garmin-health Worker
+
+[Service]
+EnvironmentFile=%h/.config/garmin-home.env
+ExecStart=/usr/bin/python3 %h/Development/Personal/garmin-givemydata/home/proxy.py
+Restart=always
+RestartSec=5
+MemoryMax=256M
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
