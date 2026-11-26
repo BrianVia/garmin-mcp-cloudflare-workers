@@ -32,7 +32,7 @@ GARMIN_PROXY_URL = "http://garmin-home"
 # Replace the id with the one `wrangler vpc service create` prints.
 [[vpc_services]]
 binding = "GARMIN_HOME"
-service_id = "REPLACE_WITH_VPC_SERVICE_ID"
+service_id = "01a21925-655b-7492-9d18-2b11f808dccb"
 
 # GarminCollector (the retired container host) is still exported but has no binding; see src/server.ts.
 [[migrations]]
